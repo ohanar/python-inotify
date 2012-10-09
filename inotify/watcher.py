@@ -240,14 +240,14 @@ class Watcher(object):
 
         try:
             yield self.add(path, mask)
-        except OSError, err:
+        except OSError as err:
             if onerror and err.errno not in self.ignored_errors:
                 onerror(err)
         for root, dirs, names in os.walk(path, topdown=False, onerror=onerror):
             for d in dirs:
                 try:
                     yield self.add(root + '/' + d, submask)
-                except OSError, err:
+                except OSError as err:
                     if onerror and err.errno not in self.ignored_errors:
                         onerror(err)
 
@@ -299,7 +299,7 @@ class AutoWatcher(Watcher):
                     mask = parentmask | inotify.IN_ONLYDIR
                     try:
                         self.add_all(evt.fullpath, mask)
-                    except OSError, err:
+                    except OSError as err:
                         if err.errno not in self.ignored_errors:
                             raise
         return events
