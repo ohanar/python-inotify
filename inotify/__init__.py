@@ -1,10 +1,15 @@
 # __init__.py - low-level interfaces to the Linux inotify subsystem
 
 # Copyright 2006 Bryan O'Sullivan <bos@serpentine.com>
+# Copyright 2012 Jan Kanis <jan.code@jankanis.nl>
 
 # This library is free software; you can redistribute it and/or modify
 # it under the terms of version 2.1 of the GNU Lesser General Public
 # License, incorporated herein by reference.
+
+# Additionally, code written by Jan Kanis may also be redistributed and/or 
+# modified under the terms of any version of the GNU Lesser General Public 
+# License greater than 2.1. 
 
 '''Low-level interface to the Linux inotify subsystem.
 

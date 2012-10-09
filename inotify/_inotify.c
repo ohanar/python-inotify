@@ -7,6 +7,10 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of version 2.1 of the GNU Lesser General
  * Public License, incorporated herein by reference.
+ * 
+ * Additionally, code written by Jan Kanis may also be redistributed and/or 
+ * modified under the terms of any version of the GNU Lesser General Public 
+ * License greater than 2.1. 
  */
 
 #include <Python.h>
