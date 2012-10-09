@@ -22,17 +22,14 @@
 
 /* for older pythons */
 #ifndef Py_TYPE
-    #define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+	#define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
 #endif
 
 /* for Python 2.5 and below */
 #ifndef PyVarObject_HEAD_INIT
-    #define PyVarObject_HEAD_INIT(type, size) \
-        PyObject_HEAD_INIT(type) size,
+	#define PyVarObject_HEAD_INIT(type, size) \
+		PyObject_HEAD_INIT(type) size,
 #endif
-
-/* Python 3 compatibility */
-
 
 
 static PyObject *init(PyObject *self, PyObject *args)
@@ -612,20 +609,20 @@ static PyMethodDef methods[] = {
 PyMODINIT_FUNC PyInit__inotify(void)
 {
 	PyObject *mod, *dict;
-    static struct PyModuleDef moduledef = {
-        PyModuleDef_HEAD_INIT, "_inotify", doc, -1, methods, };
+	static struct PyModuleDef moduledef = {
+		PyModuleDef_HEAD_INIT, "_inotify", doc, -1, methods, };
 
 	if (PyType_Ready(&event_type) == -1)
 		return NULL;
 
-    mod = PyModule_Create(&moduledef);
+	mod = PyModule_Create(&moduledef);
 
 	dict = PyModule_GetDict(mod);
 	
 	if (dict)
 		define_consts(dict);
 
-    return mod;
+	return mod;
 }
 
 #else
@@ -636,13 +633,13 @@ void init_inotify(void)
 	if (PyType_Ready(&event_type) == -1)
 		return;
 
-    mod = Py_InitModule3("_inotify", methods, doc);
+	mod = Py_InitModule3("_inotify", methods, doc);
 
 	dict = PyModule_GetDict(mod);
 	
 	if (dict)
 		define_consts(dict);
 
-    return;
+	return;
 }
 #endif
