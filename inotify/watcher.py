@@ -96,7 +96,7 @@ _event_props = {
 
 for k, v in _event_props.iteritems():
     mask = getattr(inotify, 'IN_' + k.upper())
-    def getter(self):
+    def getter(self, mask=mask):
         return self.mask & mask
     getter.__name__ = k
     getter.__doc__ = v
