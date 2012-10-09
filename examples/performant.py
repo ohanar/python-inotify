@@ -11,6 +11,8 @@
 # moments, which will in many cases put it off until the system would
 # otherwise be idle.
 
+from __future__ import print_function
+
 from inotify import watcher
 import inotify
 import select
@@ -24,8 +26,8 @@ for path in paths:
     try:
         # Watch all paths recursively, and all events on them.
         w.add_all(path, inotify.IN_ALL_EVENTS)
-    except OSError, err:
-        print >> sys.stderr, '%s: %s' % (err.filename, err.strerror)
+    except OSError as err:
+        print('%s: %s' % (err.filename, err.strerror), file=sys.stderr)
 
 # If we have nothing to watch, don't go into the read loop, or we'll
 # sit there forever.
@@ -44,7 +46,7 @@ while True:
     events = poll.poll(timeout)
     nread = 0
     if threshold() or not events:
-        print 'reading,', threshold.readable(), 'bytes available'
+        print('reading,', threshold.readable(), 'bytes available')
         for evt in w.read(0):
             nread += 1
 
@@ -61,12 +63,12 @@ while True:
             # the number of trips into our app's presumably more
             # computationally expensive upper layers.
 
-            print repr(evt.fullpath), ' | '.join(inotify.decode_mask(evt.mask))
+            print(repr(evt.fullpath), ' | '.join(inotify.decode_mask(evt.mask)))
     if nread:
-        print 'plugging back in'
+        print('plugging back in')
         timeout = None
         poll.register(w, select.POLLIN)
     else:
-        print 'unplugging,', threshold.readable(), 'bytes available'
+        print('unplugging,', threshold.readable(), 'bytes available')
         timeout = 1000
         poll.unregister(w)

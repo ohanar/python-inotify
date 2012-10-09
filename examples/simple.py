@@ -3,6 +3,8 @@
 # I do not recommend following this example in practice, as it has
 # fairly considerable CPU overhead.
 
+from __future__ import print_function
+
 from inotify import watcher
 import inotify
 import sys
@@ -15,8 +17,8 @@ for path in paths:
     try:
         # Watch all paths recursively, and all events on them.
         w.add_all(path, inotify.IN_ALL_EVENTS)
-    except OSError, err:
-        print >> sys.stderr, '%s: %s' % (err.filename, err.strerror)
+    except OSError as err:
+        print('%s: %s' % (err.filename, err.strerror), file=sys.stderr)
 
 # If we have nothing to watch, don't go into the read loop, or we'll
 # sit there forever.
@@ -31,6 +33,6 @@ try:
             # The inotify.decode_mask function returns a list of the
             # names of the bits set in an event's mask.  This is very
             # handy for debugging.
-            print repr(evt.fullpath), ' | '.join(inotify.decode_mask(evt.mask))
+            print(repr(evt.fullpath), ' | '.join(inotify.decode_mask(evt.mask)))
 except KeyboardInterrupt:
-    print >> sys.stderr, 'interrupted!'
+    print('interrupted!', file=sys.stderr)

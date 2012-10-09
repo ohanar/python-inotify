@@ -19,7 +19,7 @@ inotify.watcher package.'''
 
 __author__ = "Bryan O'Sullivan <bos@serpentine.com>"
 
-from _inotify import *
+from ._inotify import *
 
 procfs_path = '/proc/sys/fs/inotify'
 
