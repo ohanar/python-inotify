@@ -123,7 +123,6 @@ PyDoc_STRVAR(
 
 static PyObject *remove_watch(PyObject *self, PyObject *args)
 {
-	PyObject *ret = NULL;
 	uint32_t wd;
 	int fd;
 	int r;
@@ -140,15 +139,10 @@ static PyObject *remove_watch(PyObject *self, PyObject *args)
 		goto bail;
 	}
 	
-	Py_INCREF(Py_None);
-	
-	goto done;
+	Py_RETURN_NONE;
 	
 bail:
-	Py_CLEAR(ret);
-	
-done:
-	return ret;
+	return NULL;
 }
 
 PyDoc_STRVAR(
