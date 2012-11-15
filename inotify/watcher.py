@@ -199,12 +199,12 @@ class Watcher(object):
         self._paths = None
         self._wds = None
 
-    def __len__(self):
+    def num_watches(self):
         '''Return the number of active watches.'''
 
         return len(self._paths)
 
-    def __iter__(self):
+    def watches(self):
         '''Yield a (path, watch descriptor, event mask) tuple for each
         entry being watched.'''
 
