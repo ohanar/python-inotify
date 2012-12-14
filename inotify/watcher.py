@@ -153,6 +153,12 @@ class Watcher(object):
         inotify.remove_watch(self.fd, wd)
         self._remove(wd)
 
+    def remove_path(self, path):
+        '''Remove the watch for the given path.'''
+        wd = self._paths.get(os.path.normpath(path), (None,))[0]
+        if not wd is None:
+            self.remove(wd)
+
     def _remove(self, wd):
         path_mask = self._wds.pop(wd, None)
         if path_mask is not None:
