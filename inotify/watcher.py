@@ -62,13 +62,16 @@ class Event(object):
         'wd',
         )
 
-    def __init__(self, raw, path):
+    def __init__(self, raw, path=None):
         self.path = path
         self.raw = raw
-        if raw.name:
-            self.fullpath = path + '/' + raw.name
+        if path:
+            if raw.name:
+                self.fullpath = path + '/' + raw.name
+            else:
+                self.fullpath = path
         else:
-            self.fullpath = path
+            self.fullpath = None
 
         self.wd = raw.wd
         self.mask = raw.mask
@@ -188,7 +191,8 @@ class Watcher(object):
 
         events = []
         for evt in inotify.read(self.fd, bufsize):
-            events.append(Event(evt, self._wds[evt.wd][0]))
+            event = Event(evt, None if evt.wd == -1 else self._wds[evt.wd][0] )
+            events.append(event)
             if evt.mask & inotify.IN_IGNORED:
                 self._remove(evt.wd)
             elif evt.mask & inotify.IN_UNMOUNT:
