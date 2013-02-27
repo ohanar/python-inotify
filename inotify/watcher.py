@@ -148,21 +148,24 @@ class Watcher(object):
         return wd
 
     def remove(self, wd):
-        '''Remove the given watch.'''
+        '''Remove the given watch. The watch is only forgotten from the
+        internal datastructures once the corresponding IN_IGNORED event is 
+        received from the OS.'''
 
         inotify.remove_watch(self.fd, wd)
-        self._remove(wd)
 
     def remove_path(self, path):
         '''Remove the watch for the given path.'''
         wd = self._paths.get(os.path.normpath(path), (None,))[0]
-        if not wd is None:
-            self.remove(wd)
+        if wd is None:
+            raise InotifyWatcherException("{} is not a watched file".format(path))
+        self.remove(wd)
 
     def _remove(self, wd):
         path_mask = self._wds.pop(wd, None)
-        if path_mask is not None:
-            self._paths.pop(path_mask[0])
+        if path_mask is None:
+            raise InotifyWatcherException("watchdescriptor {} not known".format(wd))
+        self._paths.pop(path_mask[0])
 
     def path(self, path):
         '''Return a (watch descriptor, event mask) pair for the given path.
@@ -310,7 +313,7 @@ class AutoWatcher(Watcher):
                     mask = parentmask | inotify.IN_ONLYDIR
                     try:
                         self.add_all(evt.fullpath, mask)
-                    except OSError as err:
+                    except EnvironmentError as err:
                         if err.errno not in self.ignored_errors:
                             raise
         return events
@@ -344,3 +347,7 @@ class Threshold(object):
         exceeded the threshold.'''
 
         return self.readable() >= self.threshold
+
+
+class InotifyWatcherException (Exception):
+    pass
