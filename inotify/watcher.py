@@ -196,8 +196,8 @@ class Watcher(object):
         for evt in inotify.read(self.fd, bufsize):
             event = Event(evt, None if evt.wd == -1 else self._wds[evt.wd][0])
             events.append(event)
-            if evt.ignored:
-                self._remove(evt.wd)
+            if event.ignored:
+                self._remove(event.wd)
             if not len(self._wds):
                 self.close()
         return events
