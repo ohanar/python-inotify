@@ -18,15 +18,28 @@ if not platform.startswith('linux'):
 
 distutils.core.setup(
     name='python-inotify',
-    version='0.5',
+    version='0.6-test',
     description='Interface to Linux inotify subsystem',
-    author="Bryan O'Sullivan",
-    author_email='bos@serpentine.com',
+    author="Jan Kanis",
+    author_email='jan.code@jankanis.nl',
     license='LGPL',
     platforms='Linux',
     packages=['inotify'],
-    url='http://www.serpentine.com/',
+    url='https://bitbucket.org/JanKanis/python-inotify',
+    classifiers=['Development Status :: 4 - Beta',
+                 'Intended Audience :: Developers',
+                 'License :: OSI Approved :: GNU General Public License v2 (GPLv2)',
+                 'Operating System :: POSIX :: Linux',
+                 'Programming Language :: Python',
+                 'Programming Language :: Python :: 2',
+                 'Programming Language :: Python :: 3',
+                 'Topic :: System :: Archiving',
+                 'Topic :: System :: Filesystems',
+                 'Topic :: System :: Monitoring'],
+    use_2to3=True,
     ext_modules=[distutils.core.Extension('inotify._inotify',
                                           ['inotify/_inotify.c'])],
     cmdclass={'build_py': build_py},
     )
+
+
