@@ -198,7 +198,7 @@ class Watcher(object):
             events.append(event)
             if evt.ignored:
                 self._remove(evt.wd)
-            elif evt.umount:
+            if not len(self._wds):
                 self.close()
         return events
 
