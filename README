@@ -29,6 +29,11 @@ lacking.  In my admittedly brief experience, pyinotify was buggy and
 slow to the extent that I stopped trying to fix its problems and wrote
 a new implementation instead.
 
+One difference is that pyinotify has a callback based API in which you 
+define callbacks or methods that are called when a specific event happens, 
+forcing an event-driven programmig style. Python-inotify has an API that 
+allows you to use a blocking `Watcher.read()` call. 
+
 You can find pyinotify at http://pyinotify.sourceforge.net/
 
 

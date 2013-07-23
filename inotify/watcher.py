@@ -196,9 +196,9 @@ class Watcher(object):
         for evt in inotify.read(self.fd, bufsize):
             event = Event(evt, None if evt.wd == -1 else self._wds[evt.wd][0])
             events.append(event)
-            if evt.mask & inotify.IN_IGNORED:
+            if evt.ignored:
                 self._remove(evt.wd)
-            elif evt.mask & inotify.IN_UNMOUNT:
+            elif evt.umount:
                 self.close()
         return events
 
@@ -300,7 +300,7 @@ class AutoWatcher(Watcher):
         callable that takes one parameter.  It will be called each time
         a directory is about to be automatically watched.  If it returns
         True, the directory will be watched if it still exists,
-        otherwise, it will beb skipped.'''
+        otherwise, it will be skipped.'''
 
         super(AutoWatcher, self).__init__()
         self.addfilter = addfilter
