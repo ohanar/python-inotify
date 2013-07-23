@@ -2,7 +2,7 @@
  * _inotify.c - Python extension interfacing to the Linux inotify subsystem
  *
  * Copyright 2006 Bryan O'Sullivan <bos@serpentine.com>
- * Copyright 2012 Jan Kanis <jan.code@jankanis.nl>
+ * Copyright 2012-2013 Jan Kanis <jan.code@jankanis.nl>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of version 2.1 of the GNU Lesser General

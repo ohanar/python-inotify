@@ -1,7 +1,7 @@
 # watcher.py - high-level interfaces to the Linux inotify subsystem
 
 # Copyright 2006 Bryan O'Sullivan <bos@serpentine.com>
-# Copyright 2012 Jan Kanis <jan.code@jankanis.nl>
+# Copyright 2012-2013 Jan Kanis <jan.code@jankanis.nl>
 
 # This library is free software; you can redistribute it and/or modify
 # it under the terms of version 2.1 of the GNU Lesser General Public
@@ -24,7 +24,7 @@ available.
 The AutoWatcher class is more useful, as it automatically watches
 newly-created directories on your behalf.'''
 
-__author__ = "Bryan O'Sullivan <bos@serpentine.com>"
+__author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 from . import _inotify as inotify
 import array
@@ -194,7 +194,7 @@ class Watcher(object):
 
         events = []
         for evt in inotify.read(self.fd, bufsize):
-            event = Event(evt, None if evt.wd == -1 else self._wds[evt.wd][0] )
+            event = Event(evt, None if evt.wd == -1 else self._wds[evt.wd][0])
             events.append(event)
             if evt.mask & inotify.IN_IGNORED:
                 self._remove(evt.wd)
@@ -280,7 +280,7 @@ class Watcher(object):
         continue with the walk, or raise the exception to abort the
         walk.'''
 
-        return [w for w in self.add_iter(path, mask, onerror)]
+        return list(self.add_iter(path, mask, onerror))
 
 
 class AutoWatcher(Watcher):

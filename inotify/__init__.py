@@ -1,7 +1,7 @@
 # __init__.py - low-level interfaces to the Linux inotify subsystem
 
 # Copyright 2006 Bryan O'Sullivan <bos@serpentine.com>
-# Copyright 2012 Jan Kanis <jan.code@jankanis.nl>
+# Copyright 2012-2013 Jan Kanis <jan.code@jankanis.nl>
 
 # This library is free software; you can redistribute it and/or modify
 # it under the terms of version 2.1 of the GNU Lesser General Public
@@ -11,7 +11,8 @@
 # modified under the terms of any version of the GNU Lesser General Public 
 # License greater than 2.1. 
 
-'''Low-level interface to the Linux inotify subsystem.
+'''
+Low-level interface to the Linux inotify subsystem.
 
 The inotify subsystem provides an efficient mechanism for file status
 monitoring and change notification.
@@ -20,9 +21,10 @@ This package provides the low-level inotify system call interface and
 associated constants and helper functions.
 
 For a higher-level interface that remains highly efficient, use the
-inotify.watcher package.'''
+inotify.watcher package.
+'''
 
-__author__ = "Bryan O'Sullivan <bos@serpentine.com>"
+__author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 from ._inotify import *
 
