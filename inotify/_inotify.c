@@ -554,6 +554,7 @@ PyObject *read_events(PyObject *self, PyObject *args)
 			goto mybail;
 
 		pos += sizeof(struct inotify_event) + in->len;
+		Py_DECREF(obj);
 		continue;
 
 	mybail:
