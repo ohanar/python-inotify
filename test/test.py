@@ -99,3 +99,11 @@ def test_delete(w):
     assert ev1.delete_self
     assert ev2.ignored
     assert w.num_watches() == 0
+
+def test_noent(w):
+    with pytest.raises(OSError) as excinfo:
+        w.add('nonexistant', inotify.IN_OPEN)
+    assert excinfo.value.errno == os.errno.ENOENT
+    with pytest.raises(OSError) as excinfo:
+        w.add_all('nonexistant', inotify.IN_OPEN)
+    assert excinfo.value.errno == os.errno.ENOENT
