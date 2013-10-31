@@ -26,12 +26,59 @@ newly-created directories on your behalf.'''
 
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
+from . import constants
 from . import _inotify as inotify
 import array
 import errno
 import fcntl
 import os
 import termios
+
+
+# Inotify flags that can be specified on a watch and can be returned in an event
+_inotify_props = {
+    'access': 'File was accessed',
+    'modify': 'File was modified',
+    'attrib': 'Attribute of a directory entry was changed',
+    'close': 'File was closed',
+    'close_write': 'File was closed after being written to',
+    'close_nowrite': 'File was closed without being written to',
+    'open': 'File was opened',
+    'move': 'Directory entry was renamed',
+    'moved_from': 'Directory entry was renamed from this name',
+    'moved_to': 'Directory entry was renamed to this name',
+    'create': 'Directory entry was created',
+    'delete': 'Directory entry was deleted',
+    'delete_self': 'The watched directory entry was deleted',
+    'move_self': 'The watched directory entry was renamed',
+    'link_changed': 'The name that was watched no longer resolves to the same file',
+    }
+
+# Inotify flags that can only be returned in an event
+_event_props = {
+    'unmount': 'Directory was unmounted, and can no longer be watched',
+    'q_overflow': 'Kernel dropped events due to queue overflow',
+    'ignored': 'Directory entry is no longer being watched',
+    'isdir': 'Event occurred on a directory',
+    }
+_event_props.update(_inotify_props)
+
+# Inotify flags that can only be specified in a watch
+_watch_props = {
+    'dont_follow': "Don't dereference pathname if it is a symbolic link",
+    'excl_unlink': "Don't generate events after the file has been unlinked",
+    }
+_watch_props.update(_inotify_props)
+
+def _make_getter(name, doc):
+    def getter(self, mask=constants['IN_' + name.upper()]):
+        return self.mask & mask
+    getter.__name__ = name
+    getter.__doc__ = doc
+    return getter
+
+
+
 
 
 class Event(object):
@@ -43,74 +90,121 @@ class Event(object):
 
         cookie: rename cookie, if a rename-related event
 
-        path: path of the directory in which the event occurred
+        fullpath: the full path of the file or directory to which the event
+        occured. If this watch has more than one path, a path is chosen
+        arbitrarily.
+
+        paths: a list of paths that resolve to the watched file/directory
 
         name: name of the directory entry to which the event occurred
         (may be None if the event happened to a watched directory)
 
-        fullpath: complete path at which the event occurred
+        wd: watch descriptor that triggered this event
 
-        wd: watch descriptor that triggered this event'''
+    '''
 
     __slots__ = (
         'cookie',
-        'fullpath',
         'mask',
         'name',
-        'path',
         'raw',
-        'wd',
+        'watch',
         )
 
-    def __init__(self, raw, path=None):
-        self.path = path
-        self.raw = raw
-        if path:
-            if raw.name:
-                self.fullpath = path + '/' + raw.name
-            else:
-                self.fullpath = path
-        else:
-            self.fullpath = None
+    @property
+    def paths(self):
+        return list(self.watch.paths)
 
-        self.wd = raw.wd
+    @property
+    def fullpath(self):
+        p = self.paths[0]
+        if self.name:
+            p += '/' + self.name
+        return p
+
+    def __init__(self, raw, watch):
+        self.raw = raw
+        self.watch = watch
         self.mask = raw.mask
         self.cookie = raw.cookie
         self.name = raw.name
     
     def __repr__(self):
         r = repr(self.raw)
-        return 'Event(path=' + repr(self.path) + ', ' + r[r.find('(')+1:]
+        return ('Event(paths={}, ' + r[r.find('(')+1:]).format(repr(self.paths))
 
 
-_event_props = {
-    'access': 'File was accessed',
-    'modify': 'File was modified',
-    'attrib': 'Attribute of a directory entry was changed',
-    'close_write': 'File was closed after being written to',
-    'close_nowrite': 'File was closed without being written to',
-    'open': 'File was opened',
-    'moved_from': 'Directory entry was renamed from this name',
-    'moved_to': 'Directory entry was renamed to this name',
-    'create': 'Directory entry was created',
-    'delete': 'Directory entry was deleted',
-    'delete_self': 'The watched directory entry was deleted',
-    'move_self': 'The watched directory entry was renamed',
-    'unmount': 'Directory was unmounted, and can no longer be watched',
-    'q_overflow': 'Kernel dropped events due to queue overflow',
-    'ignored': 'Directory entry is no longer being watched',
-    'isdir': 'Event occurred on a directory',
-    }
+for name, doc in _event_props.items():
+    setattr(Event, name, property(_make_getter(name, doc), doc=doc))
 
-for k, v in _event_props.iteritems():
-    mask = getattr(inotify, 'IN_' + k.upper())
-    def getter(self, mask=mask):
-        return self.mask & mask
-    getter.__name__ = k
-    getter.__doc__ = v
-    setattr(Event, k, property(getter, doc=v))
 
-del _event_props
+
+class _Watch(object):
+    '''Represents a watch on a single file.
+
+    The following fields are available:
+
+      wd: The watch descriptor
+      paths: A set of paths that this watch watches
+      mask: The the mask for this watch
+    '''
+
+    __slots__ = (
+        'wd',
+        'paths',
+        'mask',
+        '_watcher',
+        )
+
+    def __init__(self, parent, wd):
+        '''create a new Watch for descriptor wd that is connected to inotify instance
+        parent'''
+        self._watcher = parent
+        self.wd = wd
+        self.paths = set()
+        self.mask = 0
+
+    def watchno(self):
+        '''Return the watch descriptor for this watch'''
+        return self.wd
+
+    def _add(self, path, mask):
+        '''add another path to this watch, and update the mask'''
+        self.paths.add(path)
+        self._watcher._paths[path] = self
+        if mask & inotify.IN_MASK_ADD:
+            self.mask &= (mask & ~inotify.IN_MASK_ADD)
+        else:
+            self.mask = mask
+
+    def remove_path(self, path):
+        '''remove a path from the set of path aliases this watch describes.
+        
+        If there are no more paths left, this watch will remove itself from the
+        inotify instance. The actual removal will only happen once the matching
+        IN_IGNORE event is read from the inotify instance.
+        '''
+        try:
+            self.paths.remove(path)
+            del self._watcher._paths[path]
+            if not self.paths:
+                self.remove()
+        except KeyError:
+            raise InotifyWatcherException(
+                '{} does not watch {}'.format(self, path))
+
+    def remove(self):
+        '''Schedule this watch to be removed from the inotify instance. The
+        actual removal only takes place once the corresponding IN_IGNORE event
+        has been received.'''
+        self.watcher.remove(self)
+
+    def __repr__(self):
+        return '{}.Watch({}, {})'.format(__name__, self._watcher, self.wd)
+
+
+for name, doc in _watch_props.items():
+    setattr(_Watch, name, property(_make_getter(name, doc), doc=doc))
 
 
 class Watcher(object):
@@ -119,18 +213,14 @@ class Watcher(object):
     Also adds derived information to each event that is not available
     through the normal inotify API, such as directory name.'''
 
-    __slots__ = (
-        'fd',
-        '_paths',
-        '_wds',
-        )
-
     def __init__(self):
         '''Create a new inotify instance.'''
 
         self.fd = inotify.init()
+        # self._paths is managed from the Watch objects (except when the Watch
+        # object is finally removed).
         self._paths = {}
-        self._wds = {}
+        self._watches = {}
 
     def fileno(self):
         '''Return the file descriptor this watcher uses.
@@ -146,45 +236,36 @@ class Watcher(object):
 
         path = os.path.normpath(path)
         wd = inotify.add_watch(self.fd, path, mask)
-        self._paths[path] = wd, mask
-        self._wds[wd] = path, mask
-        return wd
+        if not wd in self._watches:
+            self._watches[wd] = _Watch(self, wd)
+        watch = self._watches[wd]
+        watch._add(path, mask)
+        return watch
 
-    def remove(self, wd):
+    def remove_watch(self, watch):
         '''Remove the given watch. The watch is only forgotten from the
         internal datastructures once the corresponding IN_IGNORED event is 
         received from the OS.'''
 
-        inotify.remove_watch(self.fd, wd)
+        inotify.remove_watch(self.fd, watch.wd)
 
     def remove_path(self, path):
         '''Remove the watch for the given path.'''
-        wd = self._paths.get(os.path.normpath(path), (None,))[0]
-        if wd is None:
+        try:
+            path = os.path.normpath(path)
+            self._paths[path].remove_path(path)
+        except KeyError:
             raise InotifyWatcherException("{} is not a watched file".format(path))
-        self.remove(wd)
 
     def _remove(self, wd):
-        path_mask = self._wds.pop(wd, None)
-        if path_mask is None:
+        '''Actually remove a watch'''
+        try:
+            watch = self._watches.pop(wd)
+            for path in watch.paths:
+                self._paths.pop(path)
+        except KeyError:
             raise InotifyWatcherException("watchdescriptor {} not known".format(wd))
-        self._paths.pop(path_mask[0])
 
-    def path(self, path):
-        '''Return a (watch descriptor, event mask) pair for the given path.
-        
-        If the path is not being watched, return None.'''
-
-        return self._paths.get(path)
-
-    def wd(self, wd):
-        '''Return a (path, event mask) pair for the given watch descriptor.
-
-        If the watch descriptor is not valid or not associated with
-        this watcher, return None.'''
-
-        return self._wds.get(wd)
-        
     def read(self, bufsize=None):
         '''Read a list of queued inotify events.
 
@@ -192,15 +273,22 @@ class Watcher(object):
         immediately without blocking.  Otherwise, block until events are
         available.'''
 
+        if not len(self._watches):
+            raise NoFilesException("There are no files to watch")
+
         events = []
         for evt in inotify.read(self.fd, bufsize):
-            event = Event(evt, None if evt.wd == -1 else self._wds[evt.wd][0])
+            watch = None if evt.wd == -1 else self._watches[evt.wd]
+            event = Event(evt, watch)
             events.append(event)
             if event.ignored:
                 self._remove(event.wd)
-            if not len(self._wds):
-                self.close()
         return events
+
+    def __iter__(self):
+        while True:
+            for e in self.read():
+                yield e
 
     def close(self):
         '''Shut down this watcher.
@@ -210,19 +298,23 @@ class Watcher(object):
         os.close(self.fd)
         self.fd = None
         self._paths = None
-        self._wds = None
+        self._watches = None
+
+    def num_paths(self):
+        '''Return the number of explicitly watched paths.'''
+        return len(self._paths)
 
     def num_watches(self):
         '''Return the number of active watches.'''
-
-        return len(self._paths)
+        return len(self._watches)
 
     def watches(self):
-        '''Yield a (path, watch descriptor, event mask) tuple for each
-        entry being watched.'''
+        '''Return an iterator of all the watches'''
+        return self._watches.values()
 
-        for path, (wd, mask) in self._paths.iteritems():
-            yield path, wd, mask
+    def get_watch(self, path):
+        'Return the watcher for a given path'
+        return self._paths[path]
 
     def __del__(self):
         if self.fd is not None:
@@ -230,7 +322,7 @@ class Watcher(object):
 
     ignored_errors = [errno.ENOENT, errno.EPERM, errno.ENOTDIR]
 
-    def add_iter(self, path, mask, onerror=None):
+    def _add_iter(self, path, mask, onerror=None):
         '''Add or modify watches over path and its subdirectories.
 
         Yield each added or modified watch descriptor.
@@ -280,15 +372,11 @@ class Watcher(object):
         continue with the walk, or raise the exception to abort the
         walk.'''
 
-        return list(self.add_iter(path, mask, onerror))
+        return list(self._add_iter(path, mask, onerror))
 
 
 class AutoWatcher(Watcher):
     '''Watcher class that automatically watches newly created directories.'''
-
-    __slots__ = (
-        'addfilter',
-        )
 
     def __init__(self, addfilter=None):
         '''Create a new inotify instance.
@@ -305,16 +393,13 @@ class AutoWatcher(Watcher):
         super(AutoWatcher, self).__init__()
         self.addfilter = addfilter
 
-    _dir_create_mask = inotify.IN_ISDIR | inotify.IN_CREATE
-
     def read(self, bufsize=None):
         events = super(AutoWatcher, self).read(bufsize)
         for evt in events:
-            if evt.mask & self._dir_create_mask == self._dir_create_mask:
+            if evt.mask & inotify.IN_ISDIR and evt.mask & inotify.IN_CREATE:
                 if self.addfilter is None or self.addfilter(evt):
-                    parentmask = self._wds[evt.wd][1]
                     # See note about race avoidance via IN_ONLYDIR above.
-                    mask = parentmask | inotify.IN_ONLYDIR
+                    mask = evt.watch.mask | inotify.IN_ONLYDIR
                     try:
                         self.add_all(evt.fullpath, mask)
                     except EnvironmentError as err:
@@ -354,4 +439,8 @@ class Threshold(object):
 
 
 class InotifyWatcherException (Exception):
+    pass
+
+class NoFilesException (InotifyWatcherException):
+    '''This inotify instance does not watch anything.'''
     pass
