@@ -36,10 +36,10 @@ static PyObject *init(PyObject *self, PyObject *args)
 {
 	PyObject *ret = NULL;
 	int fd = -1;
-	
+
 	 if (!PyArg_ParseTuple(args, ":init"))
 		goto bail;
-	
+
 	Py_BEGIN_ALLOW_THREADS
 	fd = inotify_init();
 	Py_END_ALLOW_THREADS
@@ -48,19 +48,19 @@ static PyObject *init(PyObject *self, PyObject *args)
 		PyErr_SetFromErrno(PyExc_OSError);
 		goto bail;
 	}
-		
+
 	ret = PyLong_FromLong(fd);
 	if (ret == NULL)
 		goto bail;
 
 	goto done;
-	
+
 bail:
 	if (fd != -1)
 		close(fd);
 
 	Py_CLEAR(ret);
-	
+
 done:
 	return ret;
 }
@@ -91,17 +91,17 @@ static PyObject *add_watch(PyObject *self, PyObject *args)
 		PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
 		goto bail;
 	}
-	
+
 	ret = PyLong_FromLong(wd);
 	if (ret == NULL)
 		goto bail;
-	
+
 	goto done;
-	
+
 bail:
 	if (wd != -1)
 		inotify_rm_watch(fd, wd);
-	
+
 	Py_CLEAR(ret);
 
 done:
@@ -126,7 +126,7 @@ static PyObject *remove_watch(PyObject *self, PyObject *args)
 	uint32_t wd;
 	int fd;
 	int r;
-	
+
 	if (!PyArg_ParseTuple(args, "iI:remove_watch", &fd, &wd))
 		goto bail;
 
@@ -138,9 +138,9 @@ static PyObject *remove_watch(PyObject *self, PyObject *args)
 		PyErr_SetFromErrno(PyExc_OSError);
 		goto bail;
 	}
-	
+
 	Py_RETURN_NONE;
-	
+
 bail:
 	return NULL;
 }
@@ -185,6 +185,7 @@ static struct {
 	bit_name(IN_MASK_ADD),
 	bit_name(IN_ISDIR),
 	bit_name(IN_ONESHOT),
+	bit_name(IN_EXCL_UNLINK),
 	{0}
 };
 
@@ -195,7 +196,7 @@ static PyObject *decode_mask(int mask)
 
 	if (ret == NULL)
 		goto bail;
-	
+
 	for (i = 0; bit_names[i].bit; i++) {
 		if (mask & bit_names[i].bit) {
 			if (bit_names[i].pyname == NULL) {
@@ -208,26 +209,26 @@ static PyObject *decode_mask(int mask)
 				goto bail;
 		}
 	}
-	
+
 	goto done;
-	
+
 bail:
 	Py_CLEAR(ret);
 
 done:
 	return ret;
 }
-	
+
 static PyObject *pydecode_mask(PyObject *self, PyObject *args)
 {
 	int mask;
-	
+
 	if (!PyArg_ParseTuple(args, "i:decode_mask", &mask))
 		return NULL;
 
 	return decode_mask(mask);
 }
-	
+
 PyDoc_STRVAR(
 	decode_mask_doc,
 	"decode_mask(mask) -> list_of_strings\n"
@@ -244,7 +245,7 @@ static void define_const(PyObject *dict, const char *name, uint32_t val)
 
 	if (!pyname || !pyval)
 		goto bail;
-	
+
 	PyDict_SetItem(dict, pyname, pyval);
 
 bail:
@@ -278,10 +279,13 @@ static void define_consts(PyObject *dict)
 	define_const(dict, "IN_DONT_FOLLOW", IN_DONT_FOLLOW);
 	define_const(dict, "IN_MASK_ADD", IN_MASK_ADD);
 	define_const(dict, "IN_ISDIR", IN_ISDIR);
+	define_const(dict, "IN_EXCL_UNLINK", IN_EXCL_UNLINK);
 	define_const(dict, "IN_ONESHOT", IN_ONESHOT);
 	define_const(dict, "IN_ALL_EVENTS", IN_ALL_EVENTS);
 }
 
+// the event struct is not really doing anything that couldn't be done with a
+// python named tuple, it should be replaced.
 struct event {
 	PyObject_HEAD
 	PyObject *wd;
@@ -289,28 +293,28 @@ struct event {
 	PyObject *cookie;
 	PyObject *name;
 };
-	
+
 static PyObject *event_wd(PyObject *self, void *x)
 {
 	struct event *evt = (struct event *) self;
 	Py_INCREF(evt->wd);
 	return evt->wd;
 }
-	
+
 static PyObject *event_mask(PyObject *self, void *x)
 {
 	struct event *evt = (struct event *) self;
 	Py_INCREF(evt->mask);
 	return evt->mask;
 }
-	
+
 static PyObject *event_cookie(PyObject *self, void *x)
 {
 	struct event *evt = (struct event *) self;
 	Py_INCREF(evt->cookie);
 	return evt->cookie;
 }
-	
+
 static PyObject *event_name(PyObject *self, void *x)
 {
 	struct event *evt = (struct event *) self;
@@ -345,14 +349,14 @@ static void event_dealloc(struct event *evt)
 	Py_XDECREF(evt->mask);
 	Py_XDECREF(evt->cookie);
 	Py_XDECREF(evt->name);
-	
+
 	(Py_TYPE(evt)->tp_free)(evt);
 }
 
 static PyObject *event_repr(struct event *evt)
 {
 	int wd = PyLong_AsLong(evt->wd);
-	int cookie = evt->cookie == Py_None ? -1 : PyLong_AsLong(evt->cookie);
+	uint32_t cookie = evt->cookie == Py_None ? 0 : PyLong_AsLong(evt->cookie);
 	PyObject *ret = NULL, *pymasks = NULL, *pymask = NULL;
 	PyObject *join = NULL;
 
@@ -363,25 +367,25 @@ static PyObject *event_repr(struct event *evt)
 	pymasks = decode_mask(PyLong_AsLong(evt->mask));
 	if (pymasks == NULL)
 		goto bail;
-	
+
 	pymask = PyUnicode_Join(join, pymasks);
 	if (pymask == NULL)
 		goto bail;
-		
+
 	if (evt->name != Py_None) {
 		PyObject *pyname = PyObject_Repr(evt->name);
-		
-		if (cookie == -1)
+
+		if (cookie == 0)
 			ret = PyUnicode_FromFormat("event(wd=%d, mask=%U, name=%V)",
-									  wd, pymask, pyname, "???");
+										wd, pymask, pyname, "???");
 		else
 			ret = PyUnicode_FromFormat("event(wd=%d, mask=%U, "
-									  "cookie=0x%x, name=%V)",
-									  wd, pymask, cookie, pyname, "???");
+										"cookie=0x%x, name=%V)",
+									wd, pymask, cookie, pyname, "???");
 
 		Py_XDECREF(pyname);
 	} else {
-		if (cookie == -1)
+		if (cookie == 0)
 			ret = PyUnicode_FromFormat("event(wd=%d, mask=%U)",
 									  wd, pymask);
 		else {
