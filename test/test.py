@@ -3,7 +3,10 @@
 # This testing script can be run either from python 3 or python 2. Run with
 # `py.test test.py` or `py.test-2.7 test.py`.
 #
-# If run from the test directory 
+# This script will try to import the inotify module from the build directory in
+# ../build/lib.linux-{platform}-{pyversion}/inotify relative to its own
+# location. If that directory cannot be found it will import the inotify module
+# from the default path.
 
 
 from __future__ import print_function
@@ -17,11 +20,11 @@ if not sys.platform.startswith('linux'): raise Exception("This module will only 
 un = os.uname()
 ver = '.'.join(str(x) for x in sys.version_info[:2])
 testdir = os.path.dirname(os.path.abspath(__file__))
-dir = os.path.normpath(testdir + '/../build/lib.{sys}-{plat}-{ver}/'.format(
+inotify_dir = os.path.normpath(testdir + '/../build/lib.{sys}-{plat}-{ver}/'.format(
     sys=un[0].lower(), plat=un[4], ver=ver))
-if os.path.exists(dir+'/inotify') and not dir in sys.path:
-  sys.path[:0] = [dir]
-del un, ver, testdir, dir
+if os.path.exists(inotify_dir+'/inotify') and not inotify_dir in sys.path:
+  sys.path[:0] = [inotify_dir]
+del un, ver, testdir
 
 import inotify
 from inotify import watcher
@@ -77,7 +80,7 @@ def test_alias(w):
   w1 = w.add('testfile', inotify.IN_OPEN)
   w2 = w.add('testlink', inotify.IN_OPEN)
   assert w1 == w2
-  assert set(p for p, _ in w.paths()) == {'testfile', 'testlink'}
+  assert set(w.paths()) == {'testfile', 'testlink'}
   assert w.get_watch('testfile') == w.get_watch('testlink')
   assert len(w.watches()) == 1
   open('testlink').close()
@@ -89,3 +92,10 @@ def test_alias(w):
   assert len(ev) == 1
 
 
+def test_delete(w):
+    w.add('testfile', inotify.IN_DELETE_SELF)
+    os.remove('testfile')
+    ev1, ev2 = w.read(0)
+    assert ev1.delete_self
+    assert ev2.ignored
+    assert w.num_watches() == 0

@@ -28,6 +28,8 @@ __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 from ._inotify import *
 
+constants = {k: v for k,v in globals().items() if k.startswith('IN_')}
+
 procfs_path = '/proc/sys/fs/inotify'
 
 def _read_procfs_value(name):

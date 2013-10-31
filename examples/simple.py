@@ -23,11 +23,12 @@ for path in paths:
 # If we have nothing to watch, don't go into the read loop, or we'll
 # sit there forever.
 
-if not w.num_paths():
+if not w.num_watches():
+    print("no files to watch", file=sys.stderr)
     sys.exit(1)
 
 try:
-    while True:
+    while w.num_watches():
         # The Watcher.read method returns a list of event objects.
         for evt in w.read():
             # The inotify.decode_mask function returns a list of the

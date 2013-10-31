@@ -51,7 +51,6 @@ _inotify_props = {
     'delete': 'Directory entry was deleted',
     'delete_self': 'The watched directory entry was deleted',
     'move_self': 'The watched directory entry was renamed',
-    'link_changed': 'The name that was watched no longer resolves to the same file',
     }
 
 # Inotify flags that can only be returned in an event
@@ -282,7 +281,7 @@ class Watcher(object):
             event = Event(evt, watch)
             events.append(event)
             if event.ignored:
-                self._remove(event.wd)
+                self._remove(event.watch.wd)
         return events
 
     def __iter__(self):
@@ -311,6 +310,10 @@ class Watcher(object):
     def watches(self):
         '''Return an iterator of all the watches'''
         return self._watches.values()
+
+    def paths(self):
+        '''Return an iterator of all the watched paths.'''
+        return self._paths.keys()
 
     def get_watch(self, path):
         'Return the watcher for a given path'
@@ -351,15 +354,21 @@ class Watcher(object):
         try:
             yield self.add(path, mask)
         except OSError as err:
-            if onerror and err.errno not in self.ignored_errors:
+            if onerror:
                 onerror(err)
+            else:
+                raise
         for root, dirs, names in os.walk(path, topdown=False, onerror=onerror):
             for d in dirs:
                 try:
                     yield self.add(root + '/' + d, submask)
                 except OSError as err:
-                    if onerror and err.errno not in self.ignored_errors:
+                    if err.errno in self.ignored_errors:
+                        continue
+                    if onerror:
                         onerror(err)
+                    else:
+                        raise
 
     def add_all(self, path, mask, onerror=None):
         '''Add or modify watches over path and its subdirectories.
