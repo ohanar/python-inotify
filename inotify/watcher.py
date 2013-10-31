@@ -137,7 +137,6 @@ for name, doc in _event_props.items():
     setattr(Event, name, property(_make_getter(name, doc), doc=doc))
 
 
-
 class _Watch(object):
     '''Represents a watch on a single file.
 
@@ -206,6 +205,10 @@ for name, doc in _watch_props.items():
     setattr(_Watch, name, property(_make_getter(name, doc), doc=doc))
 
 
+
+  
+
+
 class Watcher(object):
     '''Provide a Pythonic interface to the low-level inotify API.
 
@@ -216,7 +219,7 @@ class Watcher(object):
         '''Create a new inotify instance.'''
 
         self.fd = inotify.init()
-        # self._paths is managed from the Watch objects (except when the Watch
+        # self._paths is managed from the Watch objects (except when the _Watch
         # object is finally removed).
         self._paths = {}
         self._watches = {}
