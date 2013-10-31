@@ -3,12 +3,6 @@
 import distutils.core
 import distutils.util
 
-try:
-    from distutils.command.build_py import build_py_2to3 \
-        as build_py
-except ImportError:
-    from distutils.command.build_py import build_py
-
 
 platform = distutils.util.get_platform()
 
@@ -36,10 +30,8 @@ distutils.core.setup(
                  'Topic :: System :: Archiving',
                  'Topic :: System :: Filesystems',
                  'Topic :: System :: Monitoring'],
-    use_2to3=True,
     ext_modules=[distutils.core.Extension('inotify._inotify',
                                           ['inotify/_inotify.c'])],
-    cmdclass={'build_py': build_py},
     )
 
 

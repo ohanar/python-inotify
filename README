@@ -17,6 +17,13 @@ AutoWatcher, which allow you to not worry about file descriptor
 management, and a third, Threshold, which lets you decide whether you
 want to read queued events yet.
 
+This package was written by Bryan O'Sullivan and published at
+https://bitbucket.org/bos/python-inotify, but seems to be no longer
+maintained. The motivation for this original release can be found at
+http://www.serpentine.com/blog/2008/01/04/why-you-should-not-use-pyinotify/.
+Python-inotify is now maintained by Jan Kanis at
+https://bitbucket.org/JanKanis/python-inotify/.
+
 
 
 This package is *not* pyinotify
@@ -44,6 +51,9 @@ Notice of copyright and license
 This library is free software; you can redistribute it and/or modify
 it under the terms of version 2.1 of the GNU Lesser General Public
 License as published by the Free Software Foundation.
+
+Code written after 2011 is also available under any newer version of the GNU
+Lesser General Public License.
 
 This library is distributed in the hope that it will be useful, but
 WITHOUT ANY WARRANTY; without even the implied warranty of
