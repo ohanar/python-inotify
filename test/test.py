@@ -78,18 +78,18 @@ def test_alias(w):
 
   os.symlink('testfile', 'testlink')
   w1 = w.add('testfile', inotify.IN_OPEN)
-  w2 = w.add('testlink', inotify.IN_OPEN)
+  w2 = w.add('testlink', inotify.IN_CLOSE)
   assert w1 == w2
   assert set(w.paths()) == {'testfile', 'testlink'}
   assert w.get_watch('testfile') == w.get_watch('testlink')
   assert len(w.watches()) == 1
   open('testlink').close()
-  ev = w.read(0)
-  assert len(ev) == 1
+  ev1, ev2 = w.read(0)
+  assert ev1.open and ev2.close
   w.remove_path('testfile')
   open('testlink').close()
   ev = w.read(0)
-  assert len(ev) == 1
+  assert any(e.close for e in ev)
 
 
 def test_delete(w):

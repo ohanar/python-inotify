@@ -237,7 +237,8 @@ class Watcher(object):
         Return the watch descriptor added or modified.'''
 
         path = os.path.normpath(path)
-        wd = inotify.add_watch(self.fd, path, mask)
+        # The path may already be watched, so add in the mask.
+        wd = inotify.add_watch(self.fd, path, mask | inotify.IN_MASK_ADD)
         if not wd in self._watches:
             self._watches[wd] = _Watch(self, wd)
         watch = self._watches[wd]
