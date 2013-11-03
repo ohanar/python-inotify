@@ -195,7 +195,7 @@ class _Watch(object):
         '''Schedule this watch to be removed from the inotify instance. The
         actual removal only takes place once the corresponding IN_IGNORE event
         has been received.'''
-        self.watcher.remove(self)
+        self._watcher.remove_watch(self)
 
     def __repr__(self):
         return '{}.Watch({}, {})'.format(__name__, self._watcher, self.wd)
