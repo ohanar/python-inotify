@@ -38,7 +38,6 @@ if os.path.exists(inotify_dir+'/inotify') and not inotify_dir in sys.path:
   sys.path.insert(idx + 1, inotify_dir)
 del un, ver, testdir, idx
 
-print(sys.path)
 
 import inotify
 from inotify import watcher
