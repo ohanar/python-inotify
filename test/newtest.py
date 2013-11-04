@@ -50,13 +50,14 @@ def w():
 
 def test_open(w):
   mask = inotify.IN_OPEN | inotify.IN_CLOSE
-  watch = w.add('testfile', mask)
+  w.add('testfile', mask)
+  watch = w._paths['testfile']
 
   assert len(watch.links) == 1
   assert watch.path == ['testfile']
   assert watch.watcher == w
   st = os.stat('testfile')
-  assert watch.inode == (st.st_dev, st.st_ino)
+  # assert watch.inode == (st.st_dev, st.st_ino)
   assert watch.mask == mask
   link = watch.links[0]
   assert link.idx == 0
@@ -79,6 +80,19 @@ def test_open(w):
   assert ev2.close_nowrite
   w.close()
 
+
+def test_linkchange(w):
+  os.symlink('testfile', 'link1')
+  os.symlink('link1', 'link2')
+  os.symlink('link2', 'link3')
+  w.add('link3', inotify.IN_OPEN)
+  watch = w._paths['link3']
+  assert len(watch.links) == 4
+  w1, w2, w3, w4 = w.links
+  # for w in [w1,w2,w3]:
+  #     assert
+  global W; W = w
+  # import pdb; pdb.set_trace()
 
 # def test_move(w):
 #   w.add('.', inotify.IN_MOVE)

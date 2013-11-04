@@ -28,6 +28,7 @@ __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 from . import constants
 from . import _inotify as inotify
+from .watcher import InotifyWatcherException, NoFilesException
 import functools
 import operator
 import array
@@ -103,7 +104,8 @@ def _make_getter(name, doc):
 
 
 class Event(object):
-    '''Derived inotify event class.
+    '''
+    Derived inotify event class.
 
     The following fields are available:
 
@@ -173,15 +175,16 @@ class Watcher (object):
     def add(self, pth, mask):
         if pth in self._paths:
             self._paths[pth].update_mask(mask)
+            return
         self._paths[pth] = _Watch(self, pth, mask)
-        return self._paths[pth]
 
     def _createwatch(self, pth, name, mask, callback):
-        wd = inotify.add_watch(self.fd, pth, mask)
+        wd = inotify.add_watch(self.fd, pth, mask | inotify.IN_MASK_ADD)
         if not wd in self._watchdescriptors:
             self._watchdescriptors[wd] = _Descriptor(self, wd)
-        self._watchdescriptors[wd].add_callback(pth, mask, name, callback)
-        return self._watchdescriptors[wd]
+        desc = self._watchdescriptors[wd]
+        desc.add_callback(pth, mask, name, callback)
+        return desc
 
     def _removewatch(self, descriptor):
         del self._watchdescriptors[descriptor.wd]
@@ -226,11 +229,14 @@ class _Watch (object):
         self.cwd = os.getcwd()
         self.mask = mask
         self.links = []
-        self.inode = None
+        # self.inode = None
         self.add(pth)
 
     def _normpath(self, pth):
-        return [p for p in pth.split(path.sep) if p not in ('', '.')]
+        split = [p for p in pth.split(path.sep) if p not in ('', '.')]
+        if pth.startswith('/'):
+            split.insert(0, '/')
+        return split
 
     def _nonrel(self, pth):
         '''Return the path joined with the working directory at the time this watch was
@@ -244,9 +250,6 @@ class _Watch (object):
         while True:
             try:
                 link = os.readlink(pth)
-                self.addlink(pth)
-                pth = os.join(path.dirname(pth), link)
-                linkdepth += 1
             except OSError as e:
                 if e.errno == os.errno.EINVAL:
                     # The entry is not a symbolic link
@@ -258,33 +261,42 @@ class _Watch (object):
                     # the originally passed path exists, but it is a broken symlink
                     return
                 raise
+            self.addlink(pth)
+            pth = path.join(path.dirname(pth), link)
+            linkdepth += 1
 
         self.addleaf(pth)
 
     def addleaf(self, pth):
         mask = self.mask | inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
-        self.links.append(_Link(len(self.links), self, mask, pth, None))
-        st = os.stat(pth)
-        self.inode = (st.st_dev, st.st_ino)
-                    
+        self.links.append(_Link(len(self.links), 'leaf', self, mask, pth, None))
+        # st = os.stat(pth)
+        # self.inode = (st.st_dev, st.st_ino)
+
     def addlink(self, pth):
         pth, name = path.split(pth)
+        if not pth:
+            pth = '.'
         mask = inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE | inotify.IN_ONLYDIR
-        self.links.append(_Link(len(self.links), self, mask, pth, name))
+        self.links.append(_Link(len(self.links), 'symlink', self, mask, pth, name))
         
     def handle_event(self, event, pth):
         if pth.idx == len(self.links) - 1 and event.mask & self.mask:
             yield Event(event, path.join(*self.path))
         else:
-            yield Event(semirawevent(mask=inotify.IN_LINK_CHANGED, cookie=0, name=None, wd=event.wd), path.join(*self.path))
-            
+            for p in self.links[pth.idx:]:
+                p.remove()
+            del self.links[pth.idx:]
+            yield Event(mediumevent(mask=inotify.IN_LINK_CHANGED, cookie=0, name=None, wd=event.wd), path.join(*self.path))
+             
 
-semirawevent = namedtuple('semirawevent', 'mask cookie name wd')
+mediumevent = namedtuple('mediumevent', 'mask cookie name wd')
 
 
 class _Link (object):
-    def __init__(self, idx, watch, mask, pth, name):
+    def __init__(self, idx, typ, watch, mask, pth, name):
         self.idx = idx
+        self.type = typ
         self.watch = watch
         self.mask = mask
         self.path = pth
@@ -293,6 +305,9 @@ class _Link (object):
 
     def handle_event(self, event):
         yield from self.watch.handle_event(event, self)
+
+    def remove(self):
+        self.wd.remove_callback(self.handle_event)
     
 
 class _Descriptor (object):
@@ -306,6 +321,11 @@ class _Descriptor (object):
     def add_callback(self, pth, mask, name, callback):
         self.mask |= mask
         self.callbacks.append((mask, name, callback))
+
+    def remove_callback(self, callback):
+        idx = [c == callback for m,n,c in self.callbacks].index(True)
+        del self.callbacks[idx]
+        
 
     def handle_event(self, event):
         for m, n, c in self.callbacks:
