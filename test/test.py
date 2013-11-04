@@ -22,9 +22,23 @@ ver = '.'.join(str(x) for x in sys.version_info[:2])
 testdir = os.path.dirname(os.path.abspath(__file__))
 inotify_dir = os.path.normpath(testdir + '/../build/lib.{sys}-{plat}-{ver}/'.format(
     sys=un[0].lower(), plat=un[4], ver=ver))
+idx = None
 if os.path.exists(inotify_dir+'/inotify') and not inotify_dir in sys.path:
-  sys.path[:0] = [inotify_dir]
-del un, ver, testdir
+  # Insert at the beginning of sys.path, but not before the current directory
+  # as we do not want to override an explicit inotify package in the current
+  # directory.
+  try:
+    idx = next(i for i, p in enumerate(sys.path) if p and os.path.samefile(p, '.'))
+  except StopIteration:
+    # In interactive mode, there is no entry for the current directory, but the
+    # first entry of sys.path is the empty string which is interpreted as
+    # current directory. So if a path to the current directory is not found,
+    # insert after this first empty string.
+    idx = 0
+  sys.path.insert(idx + 1, inotify_dir)
+del un, ver, testdir, idx
+
+print(sys.path)
 
 import inotify
 from inotify import watcher
@@ -78,18 +92,18 @@ def test_alias(w):
 
   os.symlink('testfile', 'testlink')
   w1 = w.add('testfile', inotify.IN_OPEN)
-  w2 = w.add('testlink', inotify.IN_OPEN)
+  w2 = w.add('testlink', inotify.IN_CLOSE)
   assert w1 == w2
   assert set(w.paths()) == {'testfile', 'testlink'}
   assert w.get_watch('testfile') == w.get_watch('testlink')
   assert len(w.watches()) == 1
   open('testlink').close()
-  ev = w.read(0)
-  assert len(ev) == 1
+  ev1, ev2 = w.read(0)
+  assert ev1.open and ev2.close
   w.remove_path('testfile')
   open('testlink').close()
   ev = w.read(0)
-  assert len(ev) == 1
+  assert any(e.close for e in ev)
 
 
 def test_delete(w):
@@ -107,3 +121,36 @@ def test_noent(w):
     with pytest.raises(OSError) as excinfo:
         w.add_all('nonexistant', inotify.IN_OPEN)
     assert excinfo.value.errno == os.errno.ENOENT
+
+def test_removewatch(w):
+  'test Watcher.remove_path and Watcher.remove_watch functionality'
+  open('testfile2', 'w').close()
+  open('testfile3', 'w').close()
+  watch1 = w.add('testfile', inotify.IN_OPEN)
+  watch2 = w.add('testfile2', inotify.IN_OPEN)
+  watch3 = w.add('testfile3', inotify.IN_OPEN)
+  open('testfile').close()
+  open('testfile2').close()
+  open('testfile3').close()
+  evts = w.read()
+  assert [e.fullpath for e in evts] == ['testfile', 'testfile2', 'testfile3']
+  assert all(e.mask & inotify.IN_OPEN for e in evts)
+
+  w.remove_path('testfile')
+  w.read()
+  open('testfile').close()
+  open('testfile2').close()
+  open('testfile3').close()
+  evts = w.read()
+  assert [e.fullpath for e in evts] == ['testfile2', 'testfile3']
+  assert all(e.mask & inotify.IN_OPEN for e in evts)
+
+  w.remove_watch(watch2)
+  w.read()
+  open('testfile').close()
+  open('testfile2').close()
+  open('testfile3').close()
+  evts = w.read()
+  assert [e.fullpath for e in evts] == ['testfile3']
+  assert all(e.mask & inotify.IN_OPEN for e in evts)
+

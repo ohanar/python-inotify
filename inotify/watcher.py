@@ -195,7 +195,7 @@ class _Watch(object):
         '''Schedule this watch to be removed from the inotify instance. The
         actual removal only takes place once the corresponding IN_IGNORE event
         has been received.'''
-        self.watcher.remove(self)
+        self._watcher.remove_watch(self)
 
     def __repr__(self):
         return '{}.Watch({}, {})'.format(__name__, self._watcher, self.wd)
@@ -237,7 +237,8 @@ class Watcher(object):
         Return the watch descriptor added or modified.'''
 
         path = os.path.normpath(path)
-        wd = inotify.add_watch(self.fd, path, mask)
+        # The path may already be watched, so add in the mask.
+        wd = inotify.add_watch(self.fd, path, mask | inotify.IN_MASK_ADD)
         if not wd in self._watches:
             self._watches[wd] = _Watch(self, wd)
         watch = self._watches[wd]
