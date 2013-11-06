@@ -16,21 +16,39 @@ import pytest
 
 if not sys.platform.startswith('linux'): raise Exception("This module will only work on Linux")
 
-# # find the build dir
-# un = os.uname()
-# ver = '.'.join(str(x) for x in sys.version_info[:2])
-# testdir = os.path.dirname(os.path.abspath(__file__))
-# inotify_dir = os.path.normpath(testdir + '/../build/lib.{sys}-{plat}-{ver}/'.format(
-#     sys=un[0].lower(), plat=un[4], ver=ver))
-# if os.path.exists(inotify_dir+'/inotify') and not inotify_dir in sys.path:
-#   sys.path[:0] = [inotify_dir]
-# del un, ver, testdir
+# find the build dir
+un = os.uname()
+ver = '.'.join(str(x) for x in sys.version_info[:2])
+testdir = os.path.dirname(os.path.abspath(__file__))
+inotify_dir = os.path.normpath(testdir + '/../build/lib.{sys}-{plat}-{ver}/'.format(
+    sys=un[0].lower(), plat=un[4], ver=ver))
+idx = None
+if os.path.exists(inotify_dir+'/inotify') and not inotify_dir in sys.path:
+  # Insert at the beginning of sys.path, but not before the current directory
+  # as we do not want to override an explicit inotify package in the current
+  # directory.
+  try:
+    idx = next(i for i, p in enumerate(sys.path) if p and os.path.samefile(p, '.'))
+  except StopIteration:
+    # In interactive mode, there is no entry for the current directory, but the
+    # first entry of sys.path is the empty string which is interpreted as
+    # current directory. So if a path to the current directory is not found,
+    # insert after this first empty string.
+    idx = 0
+  sys.path.insert(idx + 1, inotify_dir)
+del un, ver, testdir, idx
+
 
 import inotify
 from inotify import newwatcher as watcher
 
 print("\nTesting inotify module from", inotify.__file__)
 
+
+from IPython.terminal.ipapp import TerminalIPythonApp
+from IPython.terminal.embed import embed as ipythonembed
+# ipapp = TerminalIPythonApp.instance()
+# ipapp.initialize(argv=[]) # argv=[] instructs IPython to ignore sys.argv
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +84,7 @@ def test_open(w):
   assert link.mask == linkmask
   assert link.watch == watch
   wd = link.wd
-  assert wd.callbacks == [(linkmask, None, link.handle_event)]
+  assert wd.callbacks[None] == [(linkmask, link.handle_event)]
   assert wd.mask == linkmask
   assert wd.watcher == w
   watchdesc = wd.wd
@@ -82,17 +100,26 @@ def test_open(w):
 
 
 def test_linkchange(w):
-  os.symlink('testfile', 'link1')
-  os.symlink('link1', 'link2')
-  os.symlink('link2', 'link3')
-  w.add('link3', inotify.IN_OPEN)
-  watch = w._paths['link3']
+  os.symlink('testfile', 'link3')
+  os.symlink('link3', 'link2')
+  os.symlink('link2', 'link1')
+  w.add('link1', inotify.IN_OPEN)
+  watch = w._paths['link1']
   assert len(watch.links) == 4
-  w1, w2, w3, w4 = w.links
-  # for w in [w1,w2,w3]:
-  #     assert
-  global W; W = w
-  # import pdb; pdb.set_trace()
+  w1, w2, w3, wt  = watch.links
+  assert [w.path+'/'+w.name for w in (w1, w2, w3)] == './link1 ./link2 ./link3'.split()
+  assert (wt.path, wt.name) == ('testfile', None)
+  assert w1.wd == w2.wd == w3.wd
+  desc = w1.wd
+  linkmask = inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE | inotify.IN_ONLYDIR
+  assert desc.callbacks['link1'] == [(linkmask, w1.handle_event)]
+  assert desc.callbacks['link2'] == [(linkmask, w2.handle_event)]
+  assert desc.callbacks['link3'] == [(linkmask, w3.handle_event)]
+
+  os.rename('link1', 'link1new')
+  e1, = w.read()
+  assert not w._watchdescriptors
+  # ipythonembed()
 
 # def test_move(w):
 #   w.add('.', inotify.IN_MOVE)

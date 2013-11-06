@@ -37,7 +37,7 @@ import fcntl
 import os
 from os import path
 import termios
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 
 # Inotify flags that can be specified on a watch and can be returned in an event
@@ -171,6 +171,7 @@ class Watcher (object):
         self._watchdescriptors = {}
         self._paths = {}
         self._buffer = []
+        self._reread_required = None
 
     def add(self, pth, mask):
         if pth in self._paths:
@@ -189,16 +190,22 @@ class Watcher (object):
     def _removewatch(self, descriptor):
         del self._watchdescriptors[descriptor.wd]
 
-    def read(self, block=True, bufsize=None, store_events=False):
+    def _signal_empty_descriptor(self, descriptor):
+        '''This method is called from a _Descriptor instance if it no longer has any
+        callbacks attached to it and so should be deleted. This means
+        inotify.read may need to be called again to catch the corresponding
+        IN_IGNORE event.
+        '''
+        inotify.remove_watch(self.fd, descriptor.wd)
+        if not self._reread_required is None:
+            self._reread_required = True
+
+    def read(self, block=True, bufsize=None):
         '''Read a list of queued inotify events.
 
         If bufsize is zero, only return those events that can be read
         immediately without blocking.  Otherwise, block until events are
         available.'''
-
-        if self._buffer:
-            b, self._buffer = self._buffer, []
-            return b
 
         if not block:
             bufsize = 0
@@ -208,15 +215,23 @@ class Watcher (object):
         if not len(self._watchdescriptors):
             raise NoFilesException("There are no files to watch")
 
+        # If a watch descriptor is removed during event processing, we want to
+        # call inotify.read again to catch and process the IN_IGNORE
+        # events. What we need is a dynamically scoped variable that can be set
+        # somewhere down the call stack during the event processing. Since
+        # Python doesn't have dynamic variables we use an instance variable and
+        # check that it is in the correnct state. This is from a design point a
+        # bit unfortunate as this variable really only has a meaning while the
+        # call to Watcher.read is active on the stack.
+        assert self._reread_required is None
         events = []
-        for evt in inotify.read(self.fd, bufsize):
-            for e in self._watchdescriptors[evt.wd].handle_event(evt):
-                events.append(e)
-        if store_events:
-            self._buffer.extend(events)
-            return
-        else:
-            return events
+        while self._reread_required in (None, True):
+            self._reread_required = False
+            for evt in inotify.read(self.fd, bufsize):
+                for e in self._watchdescriptors[evt.wd].handle_event(evt):
+                    events.append(e)
+        self._reread_required = None
+        return events
 
     def close(self):
         os.close(self.fd)
@@ -261,19 +276,19 @@ class _Watch (object):
                     # the originally passed path exists, but it is a broken symlink
                     return
                 raise
-            self.addlink(pth)
+            self.add_symlink(pth)
             pth = path.join(path.dirname(pth), link)
             linkdepth += 1
 
-        self.addleaf(pth)
+        self.add_leaf(pth)
 
-    def addleaf(self, pth):
+    def add_leaf(self, pth):
         mask = self.mask | inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
         self.links.append(_Link(len(self.links), 'leaf', self, mask, pth, None))
         # st = os.stat(pth)
         # self.inode = (st.st_dev, st.st_ino)
 
-    def addlink(self, pth):
+    def add_symlink(self, pth):
         pth, name = path.split(pth)
         if not pth:
             pth = '.'
@@ -281,13 +296,14 @@ class _Watch (object):
         self.links.append(_Link(len(self.links), 'symlink', self, mask, pth, name))
         
     def handle_event(self, event, pth):
-        if pth.idx == len(self.links) - 1 and event.mask & self.mask:
+        if pth.idx == len(self.links) - 1:
+            assert event.mask & self.mask
             yield Event(event, path.join(*self.path))
         else:
             for p in self.links[pth.idx:]:
                 p.remove()
             del self.links[pth.idx:]
-            yield Event(mediumevent(mask=inotify.IN_LINK_CHANGED, cookie=0, name=None, wd=event.wd), path.join(*self.path))
+            yield Event(mediumevent(mask=inotify.IN_LINK_CHANGED, cookie=0, name=None, wd=event.wd), path.join(*self.path)), False
              
 
 mediumevent = namedtuple('mediumevent', 'mask cookie name wd')
@@ -307,7 +323,7 @@ class _Link (object):
         yield from self.watch.handle_event(event, self)
 
     def remove(self):
-        self.wd.remove_callback(self.handle_event)
+        self.wd.remove_callback(self.name, self.handle_event)
     
 
 class _Descriptor (object):
@@ -316,20 +332,29 @@ class _Descriptor (object):
         self.watcher = watcher
         self.wd = wd
         self.mask = 0
-        self.callbacks = []
+        # callbacks is indexed by name to improve speed and because we
+        # can. Indexing by name and mask would be faster but would be more
+        # cumbersome to implement.
+        self.callbacks = defaultdict(list)
 
     def add_callback(self, pth, mask, name, callback):
+        # If the callback is to a path link element, mask will include
+        # IN_ONLYDIR so we could remove that here. However the IN_ONLYDIR flag
+        # can not be returned by inotify events so keeping it in does no harm.
         self.mask |= mask
-        self.callbacks.append((mask, name, callback))
+        self.callbacks[name].append((mask, callback))
 
-    def remove_callback(self, callback):
-        idx = [c == callback for m,n,c in self.callbacks].index(True)
-        del self.callbacks[idx]
-        
+    def remove_callback(self, name, callback):
+        idx = [c == callback for m,c in self.callbacks[name]].index(True)
+        del self.callbacks[name][idx]
+        if not self.callbacks[name]:
+            del self.callbacks[name]
+        if not self.callbacks:
+            self.watcher._signal_empty_descriptor(self)
 
     def handle_event(self, event):
-        for m, n, c in self.callbacks:
-            if event.mask & m and (n == None or n == event.name):
+        for m, c in self.callbacks[event.name]:
+            if event.mask & m:
                 yield from c(event)
         if event.mask & inotify.IN_IGNORED:
             self.watcher._removewatch(self)
