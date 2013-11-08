@@ -11,12 +11,15 @@
 
 # from __future__ import print_function
 
-import sys, os, shutil, tempfile, inspect
+import sys, os, shutil, tempfile, itertools
 import pytest
+from pathlib import PosixPath as P
 
 if not sys.platform.startswith('linux'): raise Exception("This module will only work on Linux")
 
-# find the build dir
+# Find the package to test. We first try an inotify in the current directory,
+# then try to find one in the build directory of this package, and else we
+# import from the default path.
 un = os.uname()
 ver = '.'.join(str(x) for x in sys.version_info[:2])
 testdir = os.path.dirname(os.path.abspath(__file__))
@@ -69,17 +72,17 @@ def w():
 def test_open(w):
   mask = inotify.IN_OPEN | inotify.IN_CLOSE
   w.add('testfile', mask)
-  watch = w._paths['testfile']
+  watch = w._paths[P('testfile')]
 
   assert len(watch.links) == 1
-  assert watch.path == ['testfile']
+  assert watch.path == P('testfile')
   assert watch.watcher == w
   st = os.stat('testfile')
   # assert watch.inode == (st.st_dev, st.st_ino)
   assert watch.mask == mask
   link = watch.links[0]
   assert link.idx == 0
-  assert link.path == 'testfile'
+  assert link.path == P('testfile')
   linkmask = mask | inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
   assert link.mask == linkmask
   assert link.watch == watch
@@ -89,7 +92,7 @@ def test_open(w):
   assert wd.watcher == w
   watchdesc = wd.wd
   assert w._watchdescriptors[watchdesc] == wd
-  assert w._paths['testfile'] == watch
+  assert w._paths[P('testfile')] == watch
   
   open('testfile').close()
   ev1, ev2 = w.read(block=False)
@@ -104,21 +107,35 @@ def test_linkchange(w):
   os.symlink('link3', 'link2')
   os.symlink('link2', 'link1')
   w.add('link1', inotify.IN_OPEN)
-  watch = w._paths['link1']
+  watch = w._paths[P('link1')]
   assert len(watch.links) == 4
   w1, w2, w3, wt  = watch.links
-  assert [w.path+'/'+w.name for w in (w1, w2, w3)] == './link1 ./link2 ./link3'.split()
-  assert (wt.path, wt.name) == ('testfile', None)
+  assert [str(w.path[w.name]) for w in (w1, w2, w3)] == 'link1 link2 link3'.split()
+  assert (wt.path, wt.name) == (P('testfile'), None)
   assert w1.wd == w2.wd == w3.wd
   desc = w1.wd
   linkmask = inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE | inotify.IN_ONLYDIR
-  assert desc.callbacks['link1'] == [(linkmask, w1.handle_event)]
-  assert desc.callbacks['link2'] == [(linkmask, w2.handle_event)]
-  assert desc.callbacks['link3'] == [(linkmask, w3.handle_event)]
+  assert desc.callbacks[P('link1')] == [(linkmask, w1.handle_event)]
+  assert desc.callbacks[P('link2')] == [(linkmask, w2.handle_event)]
+  assert desc.callbacks[P('link3')] == [(linkmask, w3.handle_event)]
+
+  os.rename('link2', 'link2new')
+  e = w.read()
+  assert len(e) == 1
+  e1 = e[0]
+  assert e1.link_changed
+  assert len(w._watchdescriptors) == 1
+  assert len(watch.links) == 1
+  assert len(list(itertools.chain(*watch.links[0].wd.callbacks.values()))) == 1
 
   os.rename('link1', 'link1new')
-  e1, = w.read()
-  assert not w._watchdescriptors
+  e = w.read()
+  assert len(e) == 1
+  e1 = e[0]
+  assert e1.link_changed
+  assert len(w._watchdescriptors) == 0
+  assert len(watch.links) == 0
+
   # ipythonembed()
 
 # def test_move(w):
