@@ -11,7 +11,7 @@
 
 # from __future__ import print_function
 
-import sys, os, shutil, tempfile, itertools
+import sys, os, errno, shutil, tempfile, itertools
 import pytest
 from pathlib import PosixPath as P
 
@@ -48,8 +48,8 @@ from inotify import newwatcher as watcher
 print("\nTesting inotify module from", inotify.__file__)
 
 
-from IPython.terminal.ipapp import TerminalIPythonApp
-from IPython.terminal.embed import embed as ipythonembed
+# from IPython.terminal.ipapp import TerminalIPythonApp
+# from IPython.terminal.embed import embed as ipythonembed
 # ipapp = TerminalIPythonApp.instance()
 # ipapp.initialize(argv=[]) # argv=[] instructs IPython to ignore sys.argv
 
@@ -64,12 +64,40 @@ def preparedir(request):
   os.mkdir('testdir')
 
 
+@pytest.fixture(scope='module')
+def symlinkmax():
+  os.mkdir('findsymlinkmax')
+  open('findsymlinkmax/testfile', 'w').close()
+  target = 'testfile'
+  for i in range(1, 60):
+    name = 'l'+str(i)
+    os.symlink(target, 'findsymlinkmax/'+name)
+    target = name
+
+    try:
+      open('findsymlinkmax/'+name).close()
+    except IOError as e:
+      if e.errno == errno.ELOOP:
+        symlinkmax = i - 1
+        break
+      raise
+  shutil.rmtree('findsymlinkmax')
+  print('\ndetected system SYMLINKMAX:', symlinkmax)
+  return symlinkmax
+
+def makelinkchain(target, directory, numlinks):
+  for i in range(1, numlinks+1):
+    name = 'l'+str(i)
+    os.symlink(target, 'directory/'+name)
+    target = name
+
+
 @pytest.fixture
 def w():
   return watcher.Watcher()
 
 
-def test_open(w):
+def test_open(w, symlinkmax):
   mask = inotify.IN_OPEN | inotify.IN_CLOSE
   w.add('testfile', mask)
   watch = w._paths[P('testfile')]

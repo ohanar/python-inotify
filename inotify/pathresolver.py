@@ -37,8 +37,9 @@ def resolve_path(path):
     '''
     linkcache = {}
     linkcounter = [0]
-    yield from resolve_symlink(_curdir, PosixPath(path), set(),
-                                  linkcache, linkcounter)
+    for p in resolve_symlink(_curdir, PosixPath(path), set(),
+                                  linkcache, linkcounter):
+        yield p
 
 
 def resolve_symlink(location, link_contents, active_links, known_links, linkcounter):
@@ -160,3 +161,5 @@ class SymlinkLoopException (InvalidPathException):
     def __init__(self, pth, *args):
         msg = "Path not valid: The symlink at '{}' forms a symlink loop".format(pth)
         InvalidPathException.__init__(self, msg, *args)
+
+

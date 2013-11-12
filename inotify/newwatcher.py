@@ -385,7 +385,8 @@ class _Link (object):
         self.wd = watch.watcher._createwatch(self.path, self.name, mask, self.handle_event)
 
     def handle_event(self, event):
-        yield from self.watch.handle_event(event, self)
+        for e in self.watch.handle_event(event, self):
+            yield e
 
     def remove(self):
         self.wd.remove_callback(self.name, self.handle_event)
@@ -428,8 +429,10 @@ class _Descriptor (object):
     def handle_event(self, event):
         name = PosixPath(event.name) if not event.name is None else None
         for m, c in self.callbacks.get(name, ()):
-            if event.mask & m:
-                yield from c(event)
+            if not event.mask & m:
+                continue
+            for e in c(event):
+                yield e
         if event.mask & inotify.IN_IGNORED:
             assert not self.callbacks
             self.watcher._removewatch(self)
@@ -459,5 +462,5 @@ class ConcurrentFilesystemModificationException (InvalidPathException):
 
 class SymlinkLoopException (InvalidPathException):
     def __init__(self, pth, *args):
-        msg = ("Path not valid: The symlink at '{}' forms a symlink loop".format(pth)
+        msg = "Path not valid: The symlink at '{}' forms a symlink loop".format(pth)
         InvalidPathException.__init__(self, msg, *args)
