@@ -12,7 +12,8 @@
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 
-import os
+import os, errno
+import tempfile, shutil
 from pathlib import PosixPath
 
 
@@ -74,7 +75,7 @@ def resolve_symlink(location, link_contents, active_links, known_links, linkcoun
         if link_contents == _curdir:
             return
 
-        if link_contents.parts[0:1] == _parentdir:
+        if link_contents.parts[0] == '..':
             # We need to choose here if we allow traversing of a path above
             # the root or above the current directory. Going above CWD
             # should be allowed as long as we don't go above / by doing
@@ -82,10 +83,10 @@ def resolve_symlink(location, link_contents, active_links, known_links, linkcoun
             # again), so for consistency with that we also allow it,
             # although a path that requires us to do this is probably a bug
             # somewhere.
-            if not all(p in ('/', '..') for p in location.parts):
-                location = location.parent()
-            else:
+            if all(p in ('/', '..') for p in location.parts):
                 location = location['..']
+            else:
+                location = location.parent()
             # Strip the first part of link_contents off
             link_contents = link_contents.parts[1:]
             continue
@@ -94,31 +95,53 @@ def resolve_symlink(location, link_contents, active_links, known_links, linkcoun
             nextpath = location[link_contents.parts[0]]
             newlink = PosixPath(os.readlink(str(nextpath)))
         except OSError as e:
-            if e.errno == os.errno.EINVAL:
+            if e.errno == errno.EINVAL:
                 # The entry is not a symbolic link, assume it is a normal file
-                # or directory
+                # or directory. If it is a file and we need it to be a
+                # directory that will be detected the next time through the
+                # loop in the os.errno.ENOTDIR check. Checking it here would be
+                # possible, but keeping the number of system calls at one per
+                # loop makes reasoning about race conditions easier.
                 location = nextpath
                 link_contents = link_contents.parts[1:]
                 continue
-            if e.errno == os.errno.ENOENT:
+            if e.errno == errno.ENOENT:
                 # The entry does not exist
-                raise NoEntryException(nextpath)
-            if e.errno == os.errno.ENOTDIR:
+                raise FileNotFoundError(nextpath)
+            if e.errno == errno.ENOTDIR:
+                # At this point we know the path is not valid, but we can not
+                # determine with certainty what is wrong. If there were no
+                # concurrent modifications we can safely make an is_dir()
+                # call. If concurrent modifications did happen the is_dir()
+                # check may succeed erroneously but we can't detect all
+                # concurrent modifications anyway. If the check fails
+                # (erroneously or not) that indicates a concurrent modification
+                # so we fall through.
                 if not location.is_dir():
-                    raise NotDirectoryException(location)
+                    raise NotADirectoryError(location)
                 # We should not be able to get here, unless there is a bug
                 # or some relevant part of the file system was changed
                 # concurrently while we were resolving this link.
-                raise ConcurrentFilesystemModificationException(nextpath)
+                raise ConcurrentFilesystemModificationError(nextpath)
+            if e.errno == errno.ELOOP:
+                # Can only happen if a path component was changed concurrently
+                raise ConcurrentFilesystemModificationError(nextpath)
+            # For other OSErrors (such as in case of EACCESS) we propagate to
+            # the caller. 
+            raise
 
         # It is a symlink!
         if nextpath in active_links:
-            raise SymlinkLoopException(nextpath)
+            raise SymlinkLoopError(nextpath)
+
+        link_contents = link_contents.parts[1:]
         # We have not yet attempted traversing this symlink during the
         # current call or any of its parents.
         if nextpath in known_links:
+            # known_links stores fully resolved paths, so we don't need to
+            # traverse the cached path and can just continue our traversal from
+            # there.
             location = known_links[nextpath]
-            link_contents = link_contents.parts[1:]
             continue
         
         # An unknown link, resolve it recursively
@@ -129,37 +152,94 @@ def resolve_symlink(location, link_contents, active_links, known_links, linkcoun
         for loc, link in resolve_symlink(location, newlink,
                           active_links.union((nextpath,)), known_links, linkcounter):
             if lastloc:
-                yield lastloc, lastlink
+                yield lastloc, lastlink[link_contents]
             lastloc, lastlink = loc, link
         # The last yielded location is the final resolution of the symlink. The
         # last yielded link_contents is always '.' so we can ignore that.
         known_links[nextpath] = loc
         location = loc
-        link_contents = link_contents.parts[1:]
         continue
 
 
-class InvalidPathException (Exception):
-    pass
+_symlinkmax = None
+def get_symlinkmax():
+  '''Returns the maximum number of symlinks that this system will traverse in
+  resolving a file path.
 
-class NoEntryException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: '{}' does not exist".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
+  '''
+  global _symlinkmax
+  if not _symlinkmax is None:
+    return _symlinkmax
 
-class NotDirectoryException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: '{}' is not a directory".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
+  try:
+    tempdir = tempfile.mkdtemp(prefix='inotify-symlinkmax-tmpdir-')
+    open(tempdir+'/testfile', 'w').close()
 
-class ConcurrentFilesystemModificationException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: A concurrent change was detected while traversing '{}'".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
+    target = 'testfile'
+    for i in range(1, 60):
+      name = 'l'+str(i)
+      os.symlink(target, tempdir+'/'+name)
+      target = name
 
-class SymlinkLoopException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: The symlink at '{}' forms a symlink loop".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
+      try:
+        open(tempdir+'/'+name).close()
+      except OSError as e:
+        if e.errno == errno.ELOOP:
+          _symlinkmax = i - 1
+          break
+        raise
+    
+  finally:
+    if tempdir:
+      shutil.rmtree(tempdir)
+  return _symlinkmax
+
+
+
+class InvalidPathError (OSError):
+    def __init__(self, msg, path, *args):
+        self.filename = path
+        OSError.__init__(self, msg, *args)
+
+class SymlinkLoopError (InvalidPathError):
+    def __init__(self, path, *args):
+        msg = "Path not valid: The symlink at '{}' forms a symlink loop".format(path)
+        InvalidPathError.__init__(self, msg, path, errno.ELOOP, *args)
+
+class ConcurrentFilesystemModificationError (InvalidPathError):
+    def __init__(self, path, *args):
+        msg = "Path not valid: A concurrent change was detected while traversing '{}'".format(path)
+        InvalidPathError.__init__(self, msg, path, *args)
+
+
+# To be Python 2 and 3 compatible and also inherit from the right exception
+# types in python 3, we need some boilerplate.
+
+fnf_msg = "Path not valid: '{}' does not exist"
+nad_msg = "Path not valid: '{}' is not a directory"
+
+if sys.version_info[0] >= 3:
+    class FileNotFoundError (InvalidPathError, FileNotFoundError):
+        def __init__(self, path, *args):
+            InvalidPathError.__init__(self, fnf_msg.format(path), path,
+                                          errno.ENOENT, *args)
+
+    class NotADirectoryError (InvalidPathError, NotADirectoryError):
+        def __init__(self, path, *args):
+            InvalidPathError.__init__(self, nad_msg.format(path), path,
+                                          errno.ENOTDIR, *args)
+
+else:
+    class FileNotFoundError (InvalidPathError):
+        def fnf__init__(self, path, *args):
+            InvalidPathError.__init__(self, fnf_msg.format(path), path,
+                                          errno.ENOENT, *args)
+
+    class NotADirectoryError (InvalidPathError):
+        def __init__(self, path, *args):
+            InvalidPathError.__init__(self, nad_msg.format(path), path,
+                                          errno.ENOTDIR, *args)
+
+
 
 

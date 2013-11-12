@@ -26,17 +26,14 @@ newly-created directories on your behalf.'''
 
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
-from . import constants
+from . import constants, pathresolver
 from . import _inotify as inotify
-from .watcher import InotifyWatcherException, NoFilesException
+from .watcher import NoFilesException
+from .pathresolver import SymlinkLoopError
 import functools
 import operator
-import array
 import errno
-import fcntl
-import os, sys
-from os import path
-import termios
+import os, os.path, sys
 from collections import namedtuple, defaultdict
 from pathlib import PosixPath
 
@@ -138,7 +135,7 @@ class Event(object):
     @property
     def fullpath(self):
         if self.name:
-            return path.join(self.path, self.name)
+            return os.path.join(self.path, self.name)
         return self.path
 
     def __init__(self, raw, path):
@@ -165,7 +162,11 @@ for name, doc in _event_props.items():
 
 
 
-class Watcher (object):
+class PathWatcher (object):
+    '''This watcher can watch file system paths for changes. Unlike the standard
+    inotify system, this watcher also watches for any changes in the meaning of
+    the given path (e.g. symlink changes or intermediate directory changes) and
+    generates a IN_PATH_CHANGED event.'''
 
     def __init__(self):
         self.fd = inotify.init()
@@ -173,16 +174,28 @@ class Watcher (object):
         self._paths = {}
         self._buffer = []
         self._reread_required = None
+        self._reconnect = []
 
-    def add(self, pth, mask):
-        pth = PosixPath(pth)
+    def fileno(self):
+        '''Return the file descriptor this watcher uses.  Useful for passing to select
+        and poll.
+        '''
+        return self.fd
+
+    def add(self, path, mask):
+        '''Add a watch with the given mask for path. If the path is already watched,
+        update the mask according to Watcher.update_mask.
+
+        '''
+        pth = PosixPath(path)
         if pth in self._paths:
-            self._paths[pth].update_mask(mask)
+            self._paths[path].update_mask(mask)
             return
-        self._paths[pth] = _Watch(self, pth, mask)
+        self._paths[path] = _Watch(self, path, mask)
 
-    def _createwatch(self, pth, name, mask, callback):
-        wd = inotify.add_watch(self.fd, str(pth), mask | inotify.IN_MASK_ADD)
+    def _createwatch(self, path, name, mask, callback):
+        'create a new _Descriptor for path'
+        wd = inotify.add_watch(self.fd, str(path), mask | inotify.IN_MASK_ADD)
         if not wd in self._watchdescriptors:
             self._watchdescriptors[wd] = _Descriptor(self, wd)
         desc = self._watchdescriptors[wd]
@@ -190,6 +203,10 @@ class Watcher (object):
         return desc
 
     def _removewatch(self, descriptor):
+        '''actually remove a descriptor. This should be called after receiving an
+        IN_IGNORE event for the descriptor.
+
+        '''
         del self._watchdescriptors[descriptor.wd]
 
     def _signal_empty_descriptor(self, descriptor):
@@ -202,12 +219,19 @@ class Watcher (object):
         if not self._reread_required is None:
             self._reread_required = True
 
+    def _reconnect_required(self, watch):
+        '''Register a watch to be .reconnect()'ed after event processing is finished'''
+        self._reconnect.append(watch)
+
     def read(self, block=True, bufsize=None):
         '''Read a list of queued inotify events.
 
-        If bufsize is zero, only return those events that can be read
-        immediately without blocking.  Otherwise, block until events are
-        available.'''
+        block: If block is false, return only those events that can be read immediately.
+
+        bufsize: The buffer size to use to read events. Only meaningful if
+        block is True. If bufsize is too small, an error will occur.
+
+        '''
 
         if not block:
             bufsize = 0
@@ -227,15 +251,40 @@ class Watcher (object):
         # call to Watcher.read is active on the stack.
         assert self._reread_required is None
         events = []
-        while self._reread_required in (None, True):
-            self._reread_required = False
-            for evt in inotify.read(self.fd, bufsize):
-                for e in self._watchdescriptors[evt.wd].handle_event(evt):
-                    events.append(e)
-        self._reread_required = None
+        try:
+            while self._reread_required in (None, True):
+                self._reread_required = False
+                for evt in inotify.read(self.fd, bufsize):
+                    for e in self._watchdescriptors[evt.wd].handle_event(evt):
+                        events.append(e)
+        finally:
+            self._reread_required = None
+        for w in self._reconnect:
+            w.reconnect()
+        del self._reconnect[:]
         return events
 
+    def update_mask(self, path, newmask):
+        '''Replace the mask for the watch on path by the new mask. If IN_MASK_ADD is
+        set, add the new mask into the existing mask.
+        '''
+        self._paths[PosixPath(path)].update_mask(newmask)
+
+    def remove(self, path):
+        '''Remove watch on the given path.'''
+        self._paths[path].remove()
+        del self._paths[path]
+
+    def watches(self):
+        '''return an iterator of all active watches'''
+        return self._path.keys()
+
+    def getmask(self, path):
+        '''returns the mask for the watch on the given path'''
+        return self._paths[PosixPath(path)].mask
+
     def close(self):
+        'close this watcher instance'
         os.close(self.fd)
 
 
@@ -244,128 +293,88 @@ class _Watch (object):
     cwd = PosixPath('.')
     parentdir = PosixPath('..')
     
-    def __init__(self, watcher, pth, mask):
+    def __init__(self, watcher, path, mask):
         self.watcher = watcher
-        self.path = PosixPath(pth)
+        self.path = PosixPath(path)
         self.cwd = PosixPath.cwd()
         self.mask = mask
         self.links = []
-        self.complete_watch = False
-        # self.inode = None
+        self.watch_complete = False
         self.reconnect()
 
-
-
-
-            
-        
-
-    @staticmethod
-    def paths(path):
-        # empty path and the current dir is represented the same in pathlib
-        none = _Watch.cwd
-
-        if path.is_absolute():
-            dir = _Watch.root
-            path = path.relative()
-        else:
-            dir = _Watch.cwd
-        name = path.parts[0:1]
-        rest = path.parts[1:]
-
-        yield (dir, name, rest, 'path')
-
-        while name != none:
-            dir, name, rest, *type = _Watch.nextpath(dir, name, rest)
-            if name == _Watch.parentdir:
-                dir = dir.parent()
-                name = rest.parts[0:1]
-                rest = rest.parts[1:]
-            if name == none:
-                type = 'target'
-            yield (dir, name, rest) + tuple(type)
-        
-
-    @staticmethod
-    def nextpath(dir, name, rest):
-        # Test if it is a symlink
-        try:
-            link = os.readlink(str(dir[name]))
-        except OSError as e:
-            if e.errno == os.errno.EINVAL:
-                # The entry is not a symbolic link, assume it is a normal file
-                # or directory
-                return (dir[name], rest.parts[0:1], rest.parts[1:], 'path')
-            if e.errno == os.errno.ENOENT:
-                # The entry does not exist, or the path is not valid
-                return (dir, name, rest, 'error', 'ENOENT')
-            if e.errno == os.errno.ENOTDIR:
-                # A directory along the path changed, path is no longer
-                # valid. We should have received an event about this so abort
-                # now and re-establish when we receive the event.
-                return (dir, name, rest, 'error', 'ENOTDIR')
-            raise
-        else:
-            # it is a link
-            rest = PosixPath(link)[rest]
-            if rest.is_absolute():
-                dir = _Watch.root
-                rest = rest.relative()
-            # else dir remains the current dir
-            return (dir, rest.parts[0:1], rest.parts[1:], 'symlink')
-        
-        assert False
-
-
     def reconnect(self):
-        # seen_links = set()
-        
-        # Register symlinks and path elements in a non-racy way
-        pth = self.path
-        linkdepth = 0
-        while True:
-            try:
-                link = os.readlink(str(pth))
-            except OSError as e:
-                if e.errno == os.errno.EINVAL:
-                    # The entry is not a symbolic link
-                    break
-                if e.errno in (os.errno.ENOENT, os.errno.ENOTDIR):
-                    # The entry does not exist, or the path is not valid
-                    if linkdepth == 0:
-                        raise InotifyWatcherException("File does not exist: "+pth)
-                    # the originally passed path exists, but it is a broken symlink
-                    return
-                raise
-            self.add_symlink(pth)
-            pth = pth.parent()[link]
-            linkdepth += 1
+        path = _Watch.cwd
+        rest = self.path
+        if self.links:
+            path = self.links[-1].path
+            rest = self.links[-1].rest
 
-        self.add_leaf(pth)
+        linkcount = [0]
+        symlinkmax = pathresolver.get_symlinkmax()
+        try:
+            for path, rest in pathresolver.resolve_symlink(path, rest, set(), {}, linkcount):
+                if linkcount[0] > symlinkmax:
+                    raise pathresolver.SymlinkLoopError(str(self.path))
+                if path == _Watch.cwd:
+                    break
+                self.add_path_element(path, rest)
+        except OSError as e:
+            if e.errno in (errno.ENOTDIR, errno.EACCES, errno.ENOENT, errno.ELOOP):
+                # Basically any kind of path fault. Mark the reconnect as
+                # completed. If this was caused by concurrent filesystem
+                # modifications this will be picked up in an inotify event.
+                self.watch_complete = True
+                return
+            else:
+                raise
+                
+        assert path == _Watch.cwd or linkcount[0] > symlinkmax
+        self.add_leaf(path)
+        self.watch_complete = True
 
     def add_leaf(self, pth):
-        mask = self.mask | inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
+        mask = self.mask
         self.links.append(_Link(len(self.links), 'leaf', self, mask, pth, None))
         self.complete_watch = True
-        # st = os.stat(pth)
-        # self.inode = (st.st_dev, st.st_ino)
 
-    def add_symlink(self, pth):
-        name = pth.parts[-1:]
-        pth = pth.parent()
-        mask = inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE | inotify.IN_ONLYDIR
-        self.links.append(_Link(len(self.links), 'symlink', self, mask, pth, name))
+    def add_path_element(self, path, rest):
+        mask = inotify.IN_UNMOUNT | inotify.IN_ONLYDIR | inotify.IN_EXCL_UNLINK
+        assert rest != _Watch.cwd
+        if rest.parts[0] == '..':
+            mask |= inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
+            name = None
+        else:
+            mask |= inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE
+            name = rest.parts[0]
+        self.links.append(_Link(len(self.links), self, mask, path, name, rest))
         
     def handle_event(self, event, link):
-        if self.complete_watch and link.idx == len(self.links) - 1:
+        if self.watch_complete and link.idx == len(self.links) - 1:
             assert event.mask & self.mask
             yield Event(event, str(self.path))
         else:
             for p in self.links[link.idx:]:
                 p.remove()
             del self.links[link.idx:]
-            self.complete_watch = False
-            yield Event(mediumevent(mask=inotify.IN_LINK_CHANGED, cookie=0, name=None, wd=event.wd), str(self.path))
+            self.watch_complete = False
+            yield Event(mediumevent(mask=inotify.IN_PATH_CHANGED, cookie=0, name=None, wd=event.wd), str(self.path))
+
+    def update_mask(self, newmask):
+        if newmask & inotify.IN_MASK_ADD:
+            self.mask &= newmask
+        else:
+            self.mask = newmask
+        if self.watch_complete:
+            oldlink = self.links.pop()
+            self.links.append(_Link(len(self.links), self, self.mask,
+                                    oldlink.path, None, oldlink.rest))
+            oldlink.remove()
+
+    def remove(self):
+        for p in self.links:
+            p.remove()
+        self.watch_complete = False
+        del self.links[:]
 
     def __str__(self):
         return '<_Watch for {}>'.format(str(self.path))
@@ -375,21 +384,26 @@ mediumevent = namedtuple('mediumevent', 'mask cookie name wd')
 
 
 class _Link (object):
-    def __init__(self, idx, typ, watch, mask, pth, name):
+    def __init__(self, idx, watch, mask, path, name, rest):
         self.idx = idx
-        self.type = typ
         self.watch = watch
         self.mask = mask
-        self.path = pth
-        self.name = name
-        self.wd = watch.watcher._createwatch(self.path, self.name, mask, self.handle_event)
+        self.path = str(path)
+        self.rest = str(rest)
+        self.wd = watch.watcher._createwatch(path, name, mask, self.handle_event)
 
     def handle_event(self, event):
+        # This method can be called after the _Link object has been .remove()'d
+        # if the underlying event arrived before the remove. So check if this
+        # instance is still active.
+        if self.wd is None:
+            return
         for e in self.watch.handle_event(event, self):
             yield e
 
     def remove(self):
         self.wd.remove_callback(self.name, self.handle_event)
+        self.wd = None
 
     def _fullname(self):
         if self.name:
@@ -399,6 +413,14 @@ class _Link (object):
     def __str__(self):
         return '<_Link for {}>'.format(self._fullname())
     
+
+# python 2 compatibility
+try:
+    basestring
+except NameError:
+    basestring = str
+
+NoneType = type(None)
 
 class _Descriptor (object):
 
@@ -415,6 +437,8 @@ class _Descriptor (object):
         # If the callback is to a path link element, mask will include
         # IN_ONLYDIR so we could remove that here. However the IN_ONLYDIR flag
         # can not be returned by inotify events so keeping it in does no harm.
+        assert isinstance(name, (basestring, NoneType))
+        assert name is None or not '/' in name
         self.mask |= mask
         self.callbacks.setdefault(name, []).append((mask, callback))
 
@@ -428,7 +452,9 @@ class _Descriptor (object):
 
     def handle_event(self, event):
         name = PosixPath(event.name) if not event.name is None else None
-        for m, c in self.callbacks.get(name, ()):
+        # The list of callbacks can be modified from the handlers, so make a
+        # copy.
+        for m, c in list(self.callbacks.get(name, ())):
             if not event.mask & m:
                 continue
             for e in c(event):
@@ -442,25 +468,3 @@ class _Descriptor (object):
         return '<_Descriptor for wd {}: {}>'.format(self.wd, ', '.join(names))
 
 
-class InvalidPathException (Exception):
-    pass
-
-class NoEntryException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: '{}' does not exist".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
-
-class NotDirectoryException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: '{}' is not a directory".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
-
-class ConcurrentFilesystemModificationException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: A concurrent change was detected while traversing '{}'".format(pth)
-        InvalidPathException.__init__(self, msg, *args)
-
-class SymlinkLoopException (InvalidPathException):
-    def __init__(self, pth, *args):
-        msg = "Path not valid: The symlink at '{}' forms a symlink loop".format(pth)
-        InvalidPathException.__init__(self, msg, *args)

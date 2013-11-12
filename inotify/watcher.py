@@ -28,6 +28,7 @@ __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 from . import constants
 from . import _inotify as inotify
+from . import _inotify_props, _event_props, _watch_props
 import array
 import errno
 import fcntl
@@ -35,39 +36,6 @@ import os
 import termios
 
 
-# Inotify flags that can be specified on a watch and can be returned in an event
-_inotify_props = {
-    'access': 'File was accessed',
-    'modify': 'File was modified',
-    'attrib': 'Attribute of a directory entry was changed',
-    'close': 'File was closed',
-    'close_write': 'File was closed after being written to',
-    'close_nowrite': 'File was closed without being written to',
-    'open': 'File was opened',
-    'move': 'Directory entry was renamed',
-    'moved_from': 'Directory entry was renamed from this name',
-    'moved_to': 'Directory entry was renamed to this name',
-    'create': 'Directory entry was created',
-    'delete': 'Directory entry was deleted',
-    'delete_self': 'The watched directory entry was deleted',
-    'move_self': 'The watched directory entry was renamed',
-    }
-
-# Inotify flags that can only be returned in an event
-_event_props = {
-    'unmount': 'Directory was unmounted, and can no longer be watched',
-    'q_overflow': 'Kernel dropped events due to queue overflow',
-    'ignored': 'Directory entry is no longer being watched',
-    'isdir': 'Event occurred on a directory',
-    }
-_event_props.update(_inotify_props)
-
-# Inotify flags that can only be specified in a watch
-_watch_props = {
-    'dont_follow': "Don't dereference pathname if it is a symbolic link",
-    'excl_unlink': "Don't generate events after the file has been unlinked",
-    }
-_watch_props.update(_inotify_props)
 
 def _make_getter(name, doc):
     def getter(self, mask=constants['IN_' + name.upper()]):
@@ -75,8 +43,6 @@ def _make_getter(name, doc):
     getter.__name__ = name
     getter.__doc__ = doc
     return getter
-
-
 
 
 

@@ -66,22 +66,7 @@ def preparedir(request):
 
 @pytest.fixture(scope='module')
 def symlinkmax():
-  os.mkdir('findsymlinkmax')
-  open('findsymlinkmax/testfile', 'w').close()
-  target = 'testfile'
-  for i in range(1, 60):
-    name = 'l'+str(i)
-    os.symlink(target, 'findsymlinkmax/'+name)
-    target = name
-
-    try:
-      open('findsymlinkmax/'+name).close()
-    except IOError as e:
-      if e.errno == errno.ELOOP:
-        symlinkmax = i - 1
-        break
-      raise
-  shutil.rmtree('findsymlinkmax')
+  symlinkmax = pathresolver.get_symlinkmax()
   print('\ndetected system SYMLINKMAX:', symlinkmax)
   return symlinkmax
 
@@ -97,7 +82,7 @@ def w():
   return watcher.Watcher()
 
 
-def test_open(w, symlinkmax):
+def test_open(w):
   mask = inotify.IN_OPEN | inotify.IN_CLOSE
   w.add('testfile', mask)
   watch = w._paths[P('testfile')]
