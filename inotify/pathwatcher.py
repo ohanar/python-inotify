@@ -1,15 +1,11 @@
 # watcher.py - high-level interfaces to the Linux inotify subsystem
 
-# Copyright 2006 Bryan O'Sullivan <bos@serpentine.com>
 # Copyright 2012-2013 Jan Kanis <jan.code@jankanis.nl>
 
-# This library is free software; you can redistribute it and/or modify
-# it under the terms of version 2.1 of the GNU Lesser General Public
-# License, incorporated herein by reference.
-
-# Additionally, code written by Jan Kanis may also be redistributed and/or 
-# modified under the terms of any version of the GNU Lesser General Public 
-# License greater than 2.1. 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
 
 '''High-level interfaces to the Linux inotify subsystem.
 
@@ -26,78 +22,21 @@ newly-created directories on your behalf.'''
 
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
-from . import constants, pathresolver
-from . import _inotify as inotify
-from .watcher import NoFilesException
-from .pathresolver import SymlinkLoopError
+import os, os.path, sys
+import errno
 import functools
 import operator
-import errno
-import os, os.path, sys
-from collections import namedtuple, defaultdict
+from collections import namedtuple
+
 from pathlib import PosixPath
 
+from . import constants, pathresolver
+from . import _inotify
+from .constants import decode_mask, event_properties, watch_properties
+from .watcher import NoFilesException, _make_getter
+from .pathresolver import SymlinkLoopError
 
-# Inotify flags that can be specified on a watch and can be returned in an event
-_inotify_props = {
-    'access': 'File was accessed',
-    'modify': 'File was modified',
-    'attrib': 'Attribute of a directory entry was changed',
-    'close': 'File was closed',
-    'close_write': 'File was closed after being written to',
-    'close_nowrite': 'File was closed without being written to',
-    'open': 'File was opened',
-    'move': 'Directory entry was renamed',
-    'moved_from': 'Directory entry was renamed from this name',
-    'moved_to': 'Directory entry was renamed to this name',
-    'create': 'Directory entry was created',
-    'delete': 'Directory entry was deleted',
-    'delete_self': 'The watched directory entry was deleted',
-    'move_self': 'The watched directory entry was renamed',
-    'link_changed': 'The named path no longer resolves to the same file',
-    }
-
-# Inotify flags that can only be returned in an event
-_event_props = {
-    'unmount': 'Directory was unmounted, and can no longer be watched',
-    'q_overflow': 'Kernel dropped events due to queue overflow',
-    'ignored': 'Directory entry is no longer being watched',
-    'isdir': 'Event occurred on a directory',
-    }
-_event_props.update(_inotify_props)
-
-# Inotify flags that can only be specified in a watch
-_watch_props = {
-    'dont_follow': "Don't dereference pathname if it is a symbolic link",
-    'excl_unlink': "Don't generate events after the file has been unlinked",
-    }
-_watch_props.update(_inotify_props)
-
-
-# TODO: move this to __init__.py
-
-inotify_builtin_constants = functools.reduce(operator.or_, constants.values())
-inotify.IN_LINK_CHANGED = 1
-while inotify.IN_LINK_CHANGED < inotify_builtin_constants:
-    inotify.IN_LINK_CHANGED <<= 1
-constants['IN_LINK_CHANGED'] = inotify.IN_LINK_CHANGED
-
-def decode_mask(mask):
-    d = inotify.decode_mask(mask & inotify_builtin_constants)
-    if mask & inotify.IN_LINK_CHANGED:
-        d.append('IN_LINK_CHANGED')
-    return d
-
-
-
-def _make_getter(name, doc):
-    def getter(self, mask=constants['IN_' + name.upper()]):
-        return self.mask & mask
-    getter.__name__ = name
-    getter.__doc__ = doc
-    return getter
-
-
+globals().update(constants.constants)
 
 
 
@@ -154,10 +93,8 @@ class Event(object):
         r += ')'
         return r
 
-
 for name, doc in _event_props.items():
     setattr(Event, name, property(_make_getter(name, doc), doc=doc))
-
 
 
 
@@ -169,7 +106,7 @@ class PathWatcher (object):
     generates a IN_PATH_CHANGED event.'''
 
     def __init__(self):
-        self.fd = inotify.init()
+        self.fd = _inotify.init()
         self._watchdescriptors = {}
         self._paths = {}
         self._buffer = []
@@ -195,7 +132,7 @@ class PathWatcher (object):
 
     def _createwatch(self, path, name, mask, callback):
         'create a new _Descriptor for path'
-        wd = inotify.add_watch(self.fd, str(path), mask | inotify.IN_MASK_ADD)
+        wd = _inotify.add_watch(self.fd, str(path), mask | IN_MASK_ADD)
         if not wd in self._watchdescriptors:
             self._watchdescriptors[wd] = _Descriptor(self, wd)
         desc = self._watchdescriptors[wd]
@@ -215,7 +152,7 @@ class PathWatcher (object):
         inotify.read may need to be called again to catch the corresponding
         IN_IGNORE event.
         '''
-        inotify.remove_watch(self.fd, descriptor.wd)
+        _inotify.remove_watch(self.fd, descriptor.wd)
         if not self._reread_required is None:
             self._reread_required = True
 
@@ -254,7 +191,7 @@ class PathWatcher (object):
         try:
             while self._reread_required in (None, True):
                 self._reread_required = False
-                for evt in inotify.read(self.fd, bufsize):
+                for evt in _inotify.read(self.fd, bufsize):
                     for e in self._watchdescriptors[evt.wd].handle_event(evt):
                         events.append(e)
         finally:
@@ -338,13 +275,13 @@ class _Watch (object):
         self.complete_watch = True
 
     def add_path_element(self, path, rest):
-        mask = inotify.IN_UNMOUNT | inotify.IN_ONLYDIR | inotify.IN_EXCL_UNLINK
+        mask = IN_UNMOUNT | IN_ONLYDIR | IN_EXCL_UNLINK
         assert rest != _Watch.cwd
         if rest.parts[0] == '..':
-            mask |= inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
+            mask |= IN_MOVE_SELF | IN_DELETE_SELF
             name = None
         else:
-            mask |= inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE
+            mask |= IN_MOVE | IN_DELETE | IN_CREATE
             name = rest.parts[0]
         self.links.append(_Link(len(self.links), self, mask, path, name, rest))
         
@@ -357,10 +294,10 @@ class _Watch (object):
                 p.remove()
             del self.links[link.idx:]
             self.watch_complete = False
-            yield Event(mediumevent(mask=inotify.IN_PATH_CHANGED, cookie=0, name=None, wd=event.wd), str(self.path))
+            yield Event(mediumevent(mask=IN_PATH_CHANGED, cookie=0, name=None, wd=event.wd), str(self.path))
 
     def update_mask(self, newmask):
-        if newmask & inotify.IN_MASK_ADD:
+        if newmask & IN_MASK_ADD:
             self.mask &= newmask
         else:
             self.mask = newmask
@@ -459,7 +396,7 @@ class _Descriptor (object):
                 continue
             for e in c(event):
                 yield e
-        if event.mask & inotify.IN_IGNORED:
+        if event.mask & IN_IGNORED:
             assert not self.callbacks
             self.watcher._removewatch(self)
       
