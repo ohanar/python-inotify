@@ -12,21 +12,31 @@
 # License greater than 2.1. 
 
 import functools, operator
-import ._inotify
+from . import _inotify
 
 constants = {k: v for k,v in _inotify.__dict__.items() if k.startswith('IN_')}
 
-inotify_builtin_constants = functools.reduce(operator.or_, constants.values())
-IN_LINK_CHANGED = 1
-while IN_LINK_CHANGED < inotify_builtin_constants:
-    IN_LINK_CHANGED <<= 1
-constants['IN_LINK_CHANGED'] = IN_LINK_CHANGED
 
-globals().update(constants)
+# These constants are not part of the linux inotify api, they are
+# added by this module for use in PathWatcher.
+inotify_builtin_constants = functools.reduce(operator.or_, constants.values())
+IN_PATH_MOVED = 1
+while IN_PATH_MOVED <= inotify_builtin_constants:
+    IN_PATH_MOVED <<= 1
+IN_PATH_CREATE = IN_PATH_MOVED << 1
+IN_PATH_DELETE = IN_PATH_MOVED << 2
+IN_PATH_UNMOUNT = IN_PATH_MOVED << 3
+IN_PATH_CHANGED = IN_PATH_MOVED | IN_PATH_CREATE | IN_PATH_DELETE | IN_PATH_UNMOUNT
+
+constants.update(dict(IN_PATH_MOVED=IN_PATH_MOVED,
+                      IN_PATH_CREATE=IN_PATH_CREATE,
+                      IN_PATH_DELETE=IN_PATH_DELETE,
+                      IN_PATH_UNMOUNT=IN_PATH_UNMOUNT,
+                      IN_PATH_CHANGED=IN_PATH_CHANGED))
 
 
 # Inotify flags that can be specified on a watch and can be returned in an event
-_inotify_props = {
+_inotify_properties = {
     'access': 'File was accessed',
     'modify': 'File was modified',
     'attrib': 'Attribute of a directory entry was changed',
@@ -41,7 +51,11 @@ _inotify_props = {
     'delete': 'Directory entry was deleted',
     'delete_self': 'The watched directory entry was deleted',
     'move_self': 'The watched directory entry was renamed',
-    'link_changed': 'The named path no longer resolves to the same file',
+    'path_changed': 'The named path no longer resolves to the same file',
+    'path_moved': 'A component of path was moved away',
+    'path_create': 'A previously nonexisting component along the path was created',
+    'path_delete': 'A component of path was deleted',
+    'path_unmount': 'A component of path was unmounted',
     }
 
 # Inotify flags that can only be returned in an event
@@ -51,7 +65,7 @@ event_properties = {
     'ignored': 'Directory entry is no longer being watched',
     'isdir': 'Event occurred on a directory',
     }
-event_properties.update(_inotify_props)
+event_properties.update(_inotify_properties)
 
 # Inotify flags that can only be specified in a watch
 watch_properties = {
@@ -61,11 +75,10 @@ watch_properties = {
     'oneshot': "Monitor pathname for one event, then stop watching it",
     'mask_add': "Add this mask to the existing mask instead of replacing it",
     }
-watch_properties.update(_inotify_props)
+watch_properties.update(_inotify_properties)
 
 
+combined_masks = set('IN_ALL_EVENTS IN_MOVE IN_CLOSE IN_PATH_CHANGED'.split())
 def decode_mask(mask):
-    d = _inotify.decode_mask(mask & inotify_builtin_constants)
-    if mask & inotify.IN_LINK_CHANGED:
-        d.append('IN_LINK_CHANGED')
-    return d
+    return [name for name, m in constants.items() if not name in combined_masks and m & mask]
+

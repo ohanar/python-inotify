@@ -12,13 +12,14 @@
 The inotify subsystem provides an efficient mechanism for file status
 monitoring and change notification.
 
-The Watcher class hides the low-level details of the inotify
-interface, and provides a Pythonic wrapper around it.  It generates
-events that provide somewhat more information than raw inotify makes
-available.
-
-The AutoWatcher class is more useful, as it automatically watches
-newly-created directories on your behalf.'''
+The PathWatcher class is a wrapper over the low-level inotify
+interface. The exposed interface is path based rather than filesystem
+inode based such as the low level inotify and the Watcher class
+are. This means that if you watch a path /symlink where symlink links
+to myfile, PathWatcher will also generate an event if symlink is
+removed or changed, where native inotify and the Watcher class will
+not.
+'''
 
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
@@ -30,13 +31,13 @@ from collections import namedtuple
 
 from pathlib import PosixPath
 
-from . import constants, pathresolver
+from . import pathresolver
 from . import _inotify
-from .constants import decode_mask, event_properties, watch_properties
+from .in_constants import constants, decode_mask, event_properties
 from .watcher import NoFilesException, _make_getter
 from .pathresolver import SymlinkLoopError
 
-globals().update(constants.constants)
+globals().update(constants)
 
 
 
@@ -46,36 +47,30 @@ class Event(object):
 
     The following fields are available:
 
-        mask: event mask, indicating what kind of event this is
+    mask: event mask, indicating what kind of event this is
 
-        cookie: rename cookie, if a rename-related event
+    cookie: rename cookie, if a rename-related event
 
-        fullpath: the full path of the file or directory to which the event
-        occured. If this watch has more than one path, a path is chosen
-        arbitrarily.
+    path: The path of the watched file/directory
 
-        paths: a list of paths that resolve to the watched file/directory
+    name: name of the directory entry to which the event occurred. If
+    the event is of an IN_PATH_* type, name contains the full path to
+    the path element that changed. name may be None if the event did
+    not happen to a directory entry.
 
-        name: name of the directory entry to which the event occurred
-        (may be None if the event happened to a watched directory)
-
-        wd: watch descriptor that triggered this event
+    raw: The underlying inotify event. In the case of IN_PATH_*
+    events, the raw event is constructed and not from the underlying
+    inotify system.
 
     '''
 
     __slots__ = (
         'cookie',
         'mask',
+        'path',
         'name',
         'raw',
-        'path',
         )
-
-    @property
-    def fullpath(self):
-        if self.name:
-            return os.path.join(self.path, self.name)
-        return self.path
 
     def __init__(self, raw, path):
         self.raw = raw
@@ -93,9 +88,8 @@ class Event(object):
         r += ')'
         return r
 
-for name, doc in _event_props.items():
+for name, doc in event_properties.items():
     setattr(Event, name, property(_make_getter(name, doc), doc=doc))
-
 
 
 
@@ -119,16 +113,24 @@ class PathWatcher (object):
         '''
         return self.fd
 
-    def add(self, path, mask):
-        '''Add a watch with the given mask for path. If the path is already watched,
-        update the mask according to Watcher.update_mask.
+    def add(self, path, mask, remember_curdir=None):
+        '''Add a watch with the given mask for path. If the path is
+        already watched, update the mask according to
+        Watcher.update_mask. If remember_curdir is set to True, the
+        watch will store the path of the current working directory, so
+        that future chdir operations don't change the path. However
+        the current path is not watched, so if the current directory
+        is moved the meaning of watched paths may change
+        undetected. If it is False, relative paths are always resolved
+        relative to the working directory at the time of the
+        operation.
 
         '''
         pth = PosixPath(path)
         if pth in self._paths:
-            self._paths[path].update_mask(mask)
+            self._paths[path].update(mask=mask, remember_curdir=remember_curdir)
             return
-        self._paths[path] = _Watch(self, path, mask)
+        self._paths[path] = _Watch(self, path, mask, remember_curdir)
 
     def _createwatch(self, path, name, mask, callback):
         'create a new _Descriptor for path'
@@ -192,8 +194,11 @@ class PathWatcher (object):
             while self._reread_required in (None, True):
                 self._reread_required = False
                 for evt in _inotify.read(self.fd, bufsize):
-                    for e in self._watchdescriptors[evt.wd].handle_event(evt):
-                        events.append(e)
+                    if evt.wd == -1:
+                        events.append(self._handle_descriptorless_event(evt))
+                    else:
+                        for e in self._watchdescriptors[evt.wd].handle_event(evt):
+                            events.append(e)
         finally:
             self._reread_required = None
         for w in self._reconnect:
@@ -201,11 +206,20 @@ class PathWatcher (object):
         del self._reconnect[:]
         return events
 
-    def update_mask(self, path, newmask):
-        '''Replace the mask for the watch on path by the new mask. If IN_MASK_ADD is
-        set, add the new mask into the existing mask.
+    def _handle_descriptorless_event(self, evt):
+        event = Event(evt, None)
+        if event.q_overflow:
+            for w in self._paths.values():
+                w._queue_overflow()
+        return event
+
+    def update(self, path, newmask=0, remember_curdir=None):
+        '''Replace the mask for the watch on path by the new mask. If
+        IN_MASK_ADD is set, add the new mask into the existing
+        mask. If remember_curdir is set to True, save the current
+        working directory in the watch.
         '''
-        self._paths[PosixPath(path)].update_mask(newmask)
+        self._paths[PosixPath(path)].update(newmask, remember_curdir)
 
     def remove(self, path):
         '''Remove watch on the given path.'''
@@ -223,24 +237,40 @@ class PathWatcher (object):
     def close(self):
         'close this watcher instance'
         os.close(self.fd)
+        self._watchdescriptors.clear()
+        self._paths.clear()
+        self.fd = None
 
+    def __del__(self):
+        if self.fd is not None:
+            self.close()
+            
+
+syntheticevent = namedtuple('syntheticevent', 'mask cookie name wd')
 
 class _Watch (object):
     root = PosixPath('/')
-    cwd = PosixPath('.')
+    curdir = PosixPath('.')
     parentdir = PosixPath('..')
     
-    def __init__(self, watcher, path, mask):
+    def __init__(self, watcher, path, mask, remember_curdir=None):
         self.watcher = watcher
         self.path = PosixPath(path)
-        self.cwd = PosixPath.cwd()
         self.mask = mask
         self.links = []
         self.watch_complete = False
+        self._update_curdir(True if remember_curdir is None else remember_curdir)
         self.reconnect()
 
+    def _update_curdir(remember_curdir):
+        if remember_curdir is True:
+            self.cwd = PosixPath.cwd()
+        elif remember_curdir is False:
+            self.cwd = _Watch.curdir
+         
     def reconnect(self):
-        path = _Watch.cwd
+        assert not self.watch_complete
+        path = self.cwd
         rest = self.path
         if self.links:
             path = self.links[-1].path
@@ -252,7 +282,7 @@ class _Watch (object):
             for path, rest in pathresolver.resolve_symlink(path, rest, set(), {}, linkcount):
                 if linkcount[0] > symlinkmax:
                     raise pathresolver.SymlinkLoopError(str(self.path))
-                if path == _Watch.cwd:
+                if path == _Watch.curdir:
                     break
                 self.add_path_element(path, rest)
         except OSError as e:
@@ -265,7 +295,7 @@ class _Watch (object):
             else:
                 raise
                 
-        assert path == _Watch.cwd or linkcount[0] > symlinkmax
+        assert path == _Watch.curdir or linkcount[0] > symlinkmax
         self.add_leaf(path)
         self.watch_complete = True
 
@@ -275,8 +305,8 @@ class _Watch (object):
         self.complete_watch = True
 
     def add_path_element(self, path, rest):
+        assert rest != _Watch.curdir
         mask = IN_UNMOUNT | IN_ONLYDIR | IN_EXCL_UNLINK
-        assert rest != _Watch.cwd
         if rest.parts[0] == '..':
             mask |= IN_MOVE_SELF | IN_DELETE_SELF
             name = None
@@ -285,18 +315,42 @@ class _Watch (object):
             name = rest.parts[0]
         self.links.append(_Link(len(self.links), self, mask, path, name, rest))
         
+    _eventmap = {IN_MOVE | IN_MOVE_SELF: IN_PATH_MOVED,
+                 IN_DELETE | IN_DELETE_SELF: IN_PATH_DELETE,
+                 IN_CREATE: IN_PATH_CREATE,
+                 IN_UNMOUNT: IN_PATH_UNMOUNT,
+                }
     def handle_event(self, event, link):
         if self.watch_complete and link.idx == len(self.links) - 1:
             assert event.mask & self.mask
             yield Event(event, str(self.path))
         else:
-            for p in self.links[link.idx:]:
+            i = link.idx
+            if event.mask & (IN_MOVE | IN_DELETE | IN_CREATE):
+                i += 1
+            for p in self.links[i:]:
                 p.remove()
-            del self.links[link.idx:]
+            del self.links[i:]
             self.watch_complete = False
-            yield Event(mediumevent(mask=IN_PATH_CHANGED, cookie=0, name=None, wd=event.wd), str(self.path))
+            self.watcher._reconnect_required(self)
+            name = str(link.path[link.rest[0:1]])
+            for m, t in _Watch._eventmap.items():
+                if event.mask & m:
+                    evttype = t
+            if event.mask & IN_ISDIR:
+                evttype |= IN_ISDIR
+            yield Event(syntheticevent(mask=evttype, cookie=0, name=name, wd=event.wd), str(self.path))
 
-    def update_mask(self, newmask):
+    def _queue_overflow(self):
+        for p in self.links[1:]:
+            p.remove()
+        self.watch_complete = False
+        self.watcher._reconnect_required(self)
+
+    def update(self, newmask=0, remember_curdir=None):
+        self._update_curdir(remember_curdir)
+        if not newmask:
+            return
         if newmask & IN_MASK_ADD:
             self.mask &= newmask
         else:
@@ -315,12 +369,18 @@ class _Watch (object):
 
     def __str__(self):
         return '<_Watch for {}>'.format(str(self.path))
-             
-
-mediumevent = namedtuple('mediumevent', 'mask cookie name wd')
 
 
 class _Link (object):
+
+    __slots__ = ('idx',
+                 'watch',
+                 'mask',
+                 'path',
+                 'rest',
+                 'wd',
+                )
+
     def __init__(self, idx, watch, mask, path, name, rest):
         self.idx = idx
         self.watch = watch
@@ -361,6 +421,12 @@ NoneType = type(None)
 
 class _Descriptor (object):
 
+    __slots__ = ('watcher',
+                 'wd',
+                 'mask',
+                 'callbacks',
+                )
+
     def __init__(self, watcher, wd):
         self.watcher = watcher
         self.wd = wd
@@ -399,7 +465,7 @@ class _Descriptor (object):
         if event.mask & IN_IGNORED:
             assert not self.callbacks
             self.watcher._removewatch(self)
-      
+        
     def __str__(self):
         names = ', '.join(c.__self__._fullname() for c in l for l in self.callbacks.values())
         return '<_Descriptor for wd {}: {}>'.format(self.wd, ', '.join(names))

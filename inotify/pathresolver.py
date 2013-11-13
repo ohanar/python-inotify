@@ -9,10 +9,31 @@
 # version 2.1 of the License, or (at your option) any later version.
 
 
+"""
+This module contains a few functions that help traverse paths with
+symlinks.
+
+`resolve_symlinks` is a generator that yields pairs of paths, with one
+yield for each path element that is traversed to reach the final
+target of a path. This includes path elements and paths from symlinks.
+
+`resolve_path` is a wrapper around `resolve_symlinks` that takes a
+single path as an argument and sets up the other arguments to
+`resolve_symlinks`.
+
+`get_symlinkmax` is a function that determines the maximum number of
+symlinks the system will traverse in a path.
+
+Note: this module forms part of python-inotify, but is considered an
+internal module. As such there are no stability guarantees regarding
+the api's of these functions.
+"""
+
+
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 
-import os, errno
+import sys, os, errno
 import tempfile, shutil
 from pathlib import PosixPath
 
@@ -44,10 +65,11 @@ def resolve_path(path):
 
 
 def resolve_symlink(location, link_contents, active_links, known_links, linkcounter):
-    '''Recursively resolve a symlink to the file or directory it ultimately points
-    to. This function handles an unlimited number of symlinks, and
-    correctly detects symlink loops. All path parameters should be given as
-    pathlib.PosixPath instances.
+    '''Recursively resolve a symlink (or another path) to the file or
+    directory it ultimately points to. This function handles an
+    unlimited number of symlinks, and correctly detects symlink
+    loops. All path parameters should be given as pathlib.PosixPath
+    instances.
 
     location: The directory in which the currently to be resolved link resides.
 
@@ -218,7 +240,7 @@ class ConcurrentFilesystemModificationError (InvalidPathError):
 fnf_msg = "Path not valid: '{}' does not exist"
 nad_msg = "Path not valid: '{}' is not a directory"
 
-if sys.version_info[0] >= 3:
+if sys.version_info >= (3, 3):
     class FileNotFoundError (InvalidPathError, FileNotFoundError):
         def __init__(self, path, *args):
             InvalidPathError.__init__(self, fnf_msg.format(path), path,

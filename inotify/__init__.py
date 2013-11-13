@@ -26,13 +26,12 @@ inotify.watcher package.
 
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
-
-procfs_path = '/proc/sys/fs/inotify'
+_procfs_path = '/proc/sys/fs/inotify'
 
 def _read_procfs_value(name):
     def read_value():
         try:
-            return int(open(procfs_path + '/' + name).read())
+            return int(open(_procfs_path + '/' + name).read())
         except OSError as err:
             return None
 
@@ -47,6 +46,12 @@ max_user_instances = _read_procfs_value('max_user_instances')
 max_user_watches = _read_procfs_value('max_user_watches')
 
 
-from .constants import *
-from .watcher import *
-from .pathwatcher import *
+from . import _inotify as inotify
+from .in_constants import constants, event_properties, watch_properties, decode_mask
+from .watcher import Watcher, AutoWatcher, Threshold, NoFilesException
+from .pathwatcher import PathWatcher
+from .pathresolver import InvalidPathError, SymlinkLoopError, \
+        ConcurrentFilesystemModificationError, FileNotFoundError, NotADirectoryError
+globals().update(constants)
+
+

@@ -521,6 +521,10 @@ PyObject *read_events(PyObject *self, PyObject *args)
 	pos = 0;
 	
 	while (pos < nread) {
+		// FIXME: If there is more to read in the fd than the buffer size,
+		// we may read a partial struct inotify_event. The current code
+		// does not handle this and can segfault if it tries to read an
+		// event past the end of the buffer.
 		struct inotify_event *in = (struct inotify_event *) (buf + pos);
 		struct event *evt;
 		PyObject *obj;
