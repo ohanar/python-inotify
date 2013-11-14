@@ -126,8 +126,8 @@ class PathWatcher (object):
         operation.
 
         '''
-        pth = PosixPath(path)
-        if pth in self._paths:
+        path = PosixPath(path)
+        if path in self._paths:
             self._paths[path].update(mask=mask, remember_curdir=remember_curdir)
             return
         self._paths[path] = _Watch(self, path, mask, remember_curdir)
@@ -258,53 +258,62 @@ class _Watch (object):
         self.path = PosixPath(path)
         self.mask = mask
         self.links = []
-        self.watch_complete = False
+        # watch_complete values:
+        # 0: reconnect needed
+        # 1: no reconnect needed, but the final target is not being
+        # watched (e.g. due to symlink loops)
+        # 2: The path is fully resolved and the final target is being
+        # watched.
+        self.watch_complete = 0
         self._update_curdir(True if remember_curdir is None else remember_curdir)
         self.reconnect()
 
-    def _update_curdir(remember_curdir):
+    def _update_curdir(self, remember_curdir):
         if remember_curdir is True:
             self.cwd = PosixPath.cwd()
         elif remember_curdir is False:
             self.cwd = _Watch.curdir
          
     def reconnect(self):
-        assert not self.watch_complete
+        assert self.watch_complete == 0
         path = self.cwd
         rest = self.path
-        if self.links:
-            path = self.links[-1].path
-            rest = self.links[-1].rest
-
         linkcount = [0]
+        if self.links:
+            path = PosixPath(self.links[-1].path)
+            rest = PosixPath(self.links[-1].rest)
+            linkcount[0] = self.links[-1].linkcount
+
         symlinkmax = pathresolver.get_symlinkmax()
         try:
-            for path, rest in pathresolver.resolve_symlink(path, rest, set(), {}, linkcount):
+            pathsiter = pathresolver.resolve_symlink(path, rest, set(), {}, linkcount)
+            if self.links:
+                # The first yielded path pair is the one the last link is watching.
+                next(pathsiter)
+            for path, rest in pathsiter:
                 if linkcount[0] > symlinkmax:
                     raise pathresolver.SymlinkLoopError(str(self.path))
-                if path == _Watch.curdir:
+                if rest == _Watch.curdir:
                     break
-                self.add_path_element(path, rest)
+                self.add_path_element(path, rest, linkcount[0])
         except OSError as e:
             if e.errno in (errno.ENOTDIR, errno.EACCES, errno.ENOENT, errno.ELOOP):
                 # Basically any kind of path fault. Mark the reconnect as
                 # completed. If this was caused by concurrent filesystem
                 # modifications this will be picked up in an inotify event.
-                self.watch_complete = True
+                self.watch_complete = 1
                 return
             else:
                 raise
                 
-        assert path == _Watch.curdir or linkcount[0] > symlinkmax
+        assert rest == _Watch.curdir
         self.add_leaf(path)
-        self.watch_complete = True
+        self.watch_complete = 2
 
-    def add_leaf(self, pth):
-        mask = self.mask
-        self.links.append(_Link(len(self.links), 'leaf', self, mask, pth, None))
-        self.complete_watch = True
+    def add_leaf(self, path):
+        self.links.append(_Link(len(self.links), self, self.mask, path, None, _Watch.curdir, None))
 
-    def add_path_element(self, path, rest):
+    def add_path_element(self, path, rest, linkcount):
         assert rest != _Watch.curdir
         mask = IN_UNMOUNT | IN_ONLYDIR | IN_EXCL_UNLINK
         if rest.parts[0] == '..':
@@ -313,7 +322,7 @@ class _Watch (object):
         else:
             mask |= IN_MOVE | IN_DELETE | IN_CREATE
             name = rest.parts[0]
-        self.links.append(_Link(len(self.links), self, mask, path, name, rest))
+        self.links.append(_Link(len(self.links), self, mask, path, name, rest, linkcount))
         
     _eventmap = {IN_MOVE | IN_MOVE_SELF: IN_PATH_MOVED,
                  IN_DELETE | IN_DELETE_SELF: IN_PATH_DELETE,
@@ -321,17 +330,19 @@ class _Watch (object):
                  IN_UNMOUNT: IN_PATH_UNMOUNT,
                 }
     def handle_event(self, event, link):
-        if self.watch_complete and link.idx == len(self.links) - 1:
+        if self.watch_complete == 2 and link.idx == len(self.links) - 1:
             assert event.mask & self.mask
             yield Event(event, str(self.path))
         else:
             i = link.idx
             if event.mask & (IN_MOVE | IN_DELETE | IN_CREATE):
                 i += 1
+            if i >= len(self.links):
+                return
             for p in self.links[i:]:
                 p.remove()
             del self.links[i:]
-            self.watch_complete = False
+            self.watch_complete = 0
             self.watcher._reconnect_required(self)
             name = str(link.path[link.rest[0:1]])
             for m, t in _Watch._eventmap.items():
@@ -344,7 +355,7 @@ class _Watch (object):
     def _queue_overflow(self):
         for p in self.links[1:]:
             p.remove()
-        self.watch_complete = False
+        self.watch_complete = 0
         self.watcher._reconnect_required(self)
 
     def update(self, newmask=0, remember_curdir=None):
@@ -355,17 +366,16 @@ class _Watch (object):
             self.mask &= newmask
         else:
             self.mask = newmask
-        if self.watch_complete:
+        if self.watch_complete == 2:
             oldlink = self.links.pop()
-            self.links.append(_Link(len(self.links), self, self.mask,
-                                    oldlink.path, None, oldlink.rest))
+            self.add_leaf(oldlink.path)
             oldlink.remove()
 
     def remove(self):
         for p in self.links:
             p.remove()
-        self.watch_complete = False
         del self.links[:]
+        self.watch_complete = 0
 
     def __str__(self):
         return '<_Watch for {}>'.format(str(self.path))
@@ -378,15 +388,17 @@ class _Link (object):
                  'mask',
                  'path',
                  'rest',
+                 'linkcount',
                  'wd',
                 )
 
-    def __init__(self, idx, watch, mask, path, name, rest):
+    def __init__(self, idx, watch, mask, path, name, rest, linkcount):
         self.idx = idx
         self.watch = watch
         self.mask = mask
         self.path = str(path)
         self.rest = str(rest)
+        self.linkcount = linkcount
         self.wd = watch.watcher._createwatch(path, name, mask, self.handle_event)
 
     def handle_event(self, event):

@@ -205,7 +205,7 @@ def get_symlinkmax():
 
       try:
         open(tempdir+'/'+name).close()
-      except OSError as e:
+      except IOError as e:
         if e.errno == errno.ELOOP:
           _symlinkmax = i - 1
           break

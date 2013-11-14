@@ -43,13 +43,12 @@ del un, ver, testdir, idx
 
 
 import inotify
-from inotify import newwatcher as watcher
 
 print("\nTesting inotify module from", inotify.__file__)
 
 
 # from IPython.terminal.ipapp import TerminalIPythonApp
-# from IPython.terminal.embed import embed as ipythonembed
+from IPython import embed as ipythonembed
 # ipapp = TerminalIPythonApp.instance()
 # ipapp.initialize(argv=[]) # argv=[] instructs IPython to ignore sys.argv
 
@@ -79,24 +78,28 @@ def makelinkchain(target, directory, numlinks):
 
 @pytest.fixture
 def w():
-  return watcher.Watcher()
+  return inotify.PathWatcher()
 
 
 def test_open(w):
   mask = inotify.IN_OPEN | inotify.IN_CLOSE
   w.add('testfile', mask)
   watch = w._paths[P('testfile')]
+  import pdb; pdb.set_trace()
 
-  assert len(watch.links) == 1
+  assert len(watch.links) == 2
   assert watch.path == P('testfile')
   assert watch.watcher == w
-  st = os.stat('testfile')
-  # assert watch.inode == (st.st_dev, st.st_ino)
   assert watch.mask == mask
   link = watch.links[0]
   assert link.idx == 0
-  assert link.path == P('testfile')
-  linkmask = mask | inotify.IN_MOVE_SELF | inotify.IN_DELETE_SELF
+  assert link.path == str(P.getcwd())
+  assert link.rest == 'testfile'
+  link = watch.links[1]
+  assert link.idx == 1
+  assert link.path == str(P.getcwd()['testfile'])
+  assert link.rest == P('.')
+  linkmask = mask | inotify.IN_MOVE | inotify.IN_DELETE
   assert link.mask == linkmask
   assert link.watch == watch
   wd = link.wd
