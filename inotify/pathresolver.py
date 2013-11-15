@@ -190,7 +190,7 @@ def get_symlinkmax():
 
   '''
   global _symlinkmax
-  if not _symlinkmax is None:
+  if _symlinkmax is not None:
     return _symlinkmax
 
   try:
@@ -219,14 +219,17 @@ def get_symlinkmax():
 
 
 class InvalidPathError (OSError):
-    def __init__(self, msg, path, *args):
+    def __init__(self, msg, path, *args, errno=None):
         self.filename = path
+        self.errno = errno
+        if errno:
+            self.strerror = os.strerror(errno)
         OSError.__init__(self, msg, *args)
 
 class SymlinkLoopError (InvalidPathError):
     def __init__(self, path, *args):
         msg = "Path not valid: The symlink at '{}' forms a symlink loop".format(path)
-        InvalidPathError.__init__(self, msg, path, errno.ELOOP, *args)
+        InvalidPathError.__init__(self, msg, path, errno=errno.ELOOP, *args)
 
 class ConcurrentFilesystemModificationError (InvalidPathError):
     def __init__(self, path, *args):
@@ -244,23 +247,23 @@ if sys.version_info >= (3, 3):
     class FileNotFoundError (InvalidPathError, FileNotFoundError):
         def __init__(self, path, *args):
             InvalidPathError.__init__(self, fnf_msg.format(path), path,
-                                          errno.ENOENT, *args)
+                                          errno=ENOENT, *args)
 
     class NotADirectoryError (InvalidPathError, NotADirectoryError):
         def __init__(self, path, *args):
             InvalidPathError.__init__(self, nad_msg.format(path), path,
-                                          errno.ENOTDIR, *args)
+                                          errno=errno.ENOTDIR, *args)
 
 else:
     class FileNotFoundError (InvalidPathError):
-        def fnf__init__(self, path, *args):
+        def __init__(self, path, *args):
             InvalidPathError.__init__(self, fnf_msg.format(path), path,
-                                          errno.ENOENT, *args)
+                                          errno=errno.ENOENT, *args)
 
     class NotADirectoryError (InvalidPathError):
         def __init__(self, path, *args):
             InvalidPathError.__init__(self, nad_msg.format(path), path,
-                                          errno.ENOTDIR, *args)
+                                          errno=errno.ENOTDIR, *args)
 
 
 

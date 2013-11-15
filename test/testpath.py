@@ -44,7 +44,27 @@ del un, ver, testdir, idx
 
 import inotify
 
+globals().update(inotify.constants)
+
 print("\nTesting inotify module from", inotify.__file__)
+
+
+"""
+more needed concurrency tests:
+
+- remember_curdir==False and current directory is deleted
+
+- remember_curdir==True and current directory is deleted
+
+- path element directory foo is deleted and replaced with a file, but
+  the creation event has not been read yet. Make sure no infinite loop
+  occurs due to ConcurrentFilesystemModificationError, and also make
+  sure we wait for the creation event and restore the watch.
+
+- Can _inotify.read be interrupted without losing events or losing
+  consistency?
+
+"""
 
 
 # from IPython.terminal.ipapp import TerminalIPythonApp
@@ -82,39 +102,53 @@ def w():
 
 
 def test_open(w):
-  mask = inotify.IN_OPEN | inotify.IN_CLOSE
+  mask = IN_OPEN | IN_CLOSE
   w.add('testfile', mask)
   watch = w._paths[P('testfile')]
-  import pdb; pdb.set_trace()
 
   assert len(watch.links) == 2
   assert watch.path == P('testfile')
   assert watch.watcher == w
   assert watch.mask == mask
-  link = watch.links[0]
-  assert link.idx == 0
-  assert link.path == str(P.getcwd())
-  assert link.rest == 'testfile'
-  link = watch.links[1]
-  assert link.idx == 1
-  assert link.path == str(P.getcwd()['testfile'])
-  assert link.rest == P('.')
-  linkmask = mask | inotify.IN_MOVE | inotify.IN_DELETE
-  assert link.mask == linkmask
-  assert link.watch == watch
-  wd = link.wd
-  assert wd.callbacks[None] == [(linkmask, link.handle_event)]
-  assert wd.mask == linkmask
+
+  link1 = watch.links[0]
+  assert link1.idx == 0
+  assert link1.path == str(P.cwd())
+  assert link1.rest == 'testfile'
+  assert link1.mask == IN_UNMOUNT | IN_ONLYDIR | IN_EXCL_UNLINK | IN_IGNORED | IN_MOVE | IN_DELETE | IN_CREATE
+  assert link1.watch == watch
+  wd = link1.wd
+  assert wd.callbacks['testfile'] == [(link1.mask, link1.handle_event)]
+  assert wd.mask == link1.mask
   assert wd.watcher == w
   watchdesc = wd.wd
   assert w._watchdescriptors[watchdesc] == wd
-  assert w._paths[P('testfile')] == watch
+
+  link2 = watch.links[1]
+  assert link2.idx == 1
+  assert link2.path == str(P.cwd()['testfile'])
+  assert link2.rest == '.'
+  assert link2.mask == IN_OPEN | IN_CLOSE
+  assert link2.watch == watch
+  wd = link2.wd
+  assert wd.callbacks[None] == [(link2.mask, link2.handle_event)]
+  assert wd.mask == link2.mask
+  assert wd.watcher == w
+  watchdesc = wd.wd
+  assert w._watchdescriptors[watchdesc] == wd
   
   open('testfile').close()
   ev1, ev2 = w.read(block=False)
   assert ev1.open
   assert ev2.close
   assert ev2.close_nowrite
+
+  os.remove('testfile')
+  ev3 = w.read(block=False)[0]
+  assert ev3.path_delete and ev3.path_changed
+  assert ev3.path == 'testfile'
+  assert P(ev3.name).parts[-1] == 'testfile'
+
   w.close()
 
 
@@ -122,13 +156,13 @@ def test_linkchange(w):
   os.symlink('testfile', 'link3')
   os.symlink('link3', 'link2')
   os.symlink('link2', 'link1')
-  w.add('link1', inotify.IN_OPEN)
+  w.add('link1', inotify.IN_OPEN, remember_curdir=False)
   watch = w._paths[P('link1')]
-  assert len(watch.links) == 4
-  w1, w2, w3, wt  = watch.links
-  assert [str(w.path[w.name]) for w in (w1, w2, w3)] == 'link1 link2 link3'.split()
-  assert (wt.path, wt.name) == (P('testfile'), None)
-  assert w1.wd == w2.wd == w3.wd
+  assert len(watch.links) == 5
+  w1, w2, w3, w4, wt  = watch.links
+  assert [w.name for w in (w1, w2, w3, w4)] == 'link1 link2 link3 testfile'.split()
+  assert (wt.path, wt.name) == ('testfile', None)
+  assert w1.wd == w2.wd == w3.wd == w4.wd
   desc = w1.wd
   linkmask = inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE | inotify.IN_ONLYDIR
   assert desc.callbacks[P('link1')] == [(linkmask, w1.handle_event)]
