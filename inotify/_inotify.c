@@ -376,12 +376,13 @@ static PyObject *event_repr(struct event *evt)
 		PyObject *pyname = PyObject_Repr(evt->name);
 
 #if PY_MAJOR_VERSION < 3
-		if (pyname != NULL && !PyUnicode_Check(pyname)) {
+		if (pyname != NULL) {
 			PyObject *unicode_pyname = PyObject_Unicode(pyname);
-			Py_XDECREF(pyname);
+			Py_DECREF(pyname);
 			pyname = unicode_pyname;
 		} 
 #endif
+
 		if (cookie == 0)
 			ret = PyUnicode_FromFormat("event(wd=%d, mask=%U, name=%V)",
 										wd, pymask, pyname, "???");
