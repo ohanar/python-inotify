@@ -153,3 +153,7 @@ def test_removewatch(w):
   assert [e.fullpath for e in evts] == ['testfile3']
   assert all(e.mask & inotify.IN_OPEN for e in evts)
 
+
+def test_repr(w):
+  w.add_all('.', inotify.IN_ALL_EVENTS)
+  print(w.read(0))
