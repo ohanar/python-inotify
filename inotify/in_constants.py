@@ -20,18 +20,22 @@ constants = {k: v for k,v in _inotify.__dict__.items() if k.startswith('IN_')}
 # These constants are not part of the linux inotify api, they are
 # added by this module for use in PathWatcher.
 inotify_builtin_constants = functools.reduce(operator.or_, constants.values())
-IN_PATH_MOVED = 1
-while IN_PATH_MOVED <= inotify_builtin_constants:
-    IN_PATH_MOVED <<= 1
-IN_PATH_CREATE = IN_PATH_MOVED << 1
-IN_PATH_DELETE = IN_PATH_MOVED << 2
-IN_PATH_UNMOUNT = IN_PATH_MOVED << 3
-IN_PATH_CHANGED = IN_PATH_MOVED | IN_PATH_CREATE | IN_PATH_DELETE | IN_PATH_UNMOUNT
+IN_PATH_MOVED_TO = 1
+while IN_PATH_MOVED_TO <= inotify_builtin_constants:
+    IN_PATH_MOVED_TO <<= 1
+IN_PATH_MOVED_FROM = IN_PATH_MOVED_TO << 1
+IN_PATH_CREATE = IN_PATH_MOVED_TO << 2
+IN_PATH_DELETE = IN_PATH_MOVED_TO << 3
+IN_PATH_UNMOUNT = IN_PATH_MOVED_TO << 4
+IN_PATH_MOVED = IN_PATH_MOVED_TO | IN_PATH_MOVED_FROM
+IN_PATH_CHANGED = IN_PATH_MOVED_TO | IN_PATH_MOVED_FROM | IN_PATH_CREATE | IN_PATH_DELETE | IN_PATH_UNMOUNT
 
-constants.update(dict(IN_PATH_MOVED=IN_PATH_MOVED,
+constants.update(dict(IN_PATH_MOVED_TO=IN_PATH_MOVED_TO,
+                      IN_PATH_MOVED_FROM=IN_PATH_MOVED_FROM,
                       IN_PATH_CREATE=IN_PATH_CREATE,
                       IN_PATH_DELETE=IN_PATH_DELETE,
                       IN_PATH_UNMOUNT=IN_PATH_UNMOUNT,
+                      IN_PATH_MOVED=IN_PATH_MOVED,
                       IN_PATH_CHANGED=IN_PATH_CHANGED))
 
 
@@ -52,7 +56,9 @@ _inotify_properties = {
     'delete_self': 'The watched directory entry was deleted',
     'move_self': 'The watched directory entry was renamed',
     'path_changed': 'The named path no longer resolves to the same file',
-    'path_moved': 'A component of path was moved away',
+    'path_moved_from': 'A component of path was moved away',
+    'path_moved_to': 'A file or directory was moved into the path as a component',
+    'path_moved': 'A component of path was moved',
     'path_create': 'A previously nonexisting component along the path was created',
     'path_delete': 'A component of path was deleted',
     'path_unmount': 'A component of path was unmounted',
@@ -78,7 +84,7 @@ watch_properties = {
 watch_properties.update(_inotify_properties)
 
 
-combined_masks = set('IN_ALL_EVENTS IN_MOVE IN_CLOSE IN_PATH_CHANGED'.split())
+combined_masks = set('IN_ALL_EVENTS IN_MOVE IN_CLOSE IN_PATH_MOVED IN_PATH_CHANGED'.split())
 def decode_mask(mask):
     return [name for name, m in constants.items() if not name in combined_masks and m & mask]
 

@@ -11,7 +11,7 @@
 
 # from __future__ import print_function
 
-import sys, os, errno, shutil, tempfile, itertools
+import sys, os, errno, shutil, tempfile, itertools, functools, operator
 import pytest
 from pathlib import PosixPath as P
 
@@ -43,6 +43,7 @@ del un, ver, testdir, idx
 
 
 import inotify
+import inotify._inotify
 
 globals().update(inotify.constants)
 
@@ -63,6 +64,19 @@ more needed concurrency tests:
 
 - Can _inotify.read be interrupted without losing events or losing
   consistency?
+
+- Unmounting of a filesystem mounted on a watched directory only
+  generates events on the mount point itself, not on the parent
+  directory.
+
+- Worse than the above, mounting a new filesystem on a watched
+  directory does not generate any events of any kind whatsoever, so in
+  that case it seems to be impossible to maintain a fully watched
+  path. To catch mounts we could use a netlink socket and watch for
+  block device changes, but bind mounts don't even generate those.
+
+- The best way to catch mounts appears to be to monitor /dev/mtab. Not
+  100% reliable but it probably works for most cases.
 
 """
 
@@ -101,6 +115,14 @@ def w():
   return inotify.PathWatcher()
 
 
+def test_constants():
+  assert IN_PATH_MOVED_TO > inotify._inotify.IN_ALL_EVENTS
+  c_events = functools.reduce(operator.or_, (v for k,v in inotify._inotify.__dict__.items() if k.startswith('IN_')))
+  path_events = functools.reduce(operator.or_, (v for k,v in inotify.constants.items() if k.startswith('IN_PATH_')))
+  assert not c_events & path_events
+  assert path_events > c_events
+
+
 def test_open(w):
   mask = IN_OPEN | IN_CLOSE
   w.add('testfile', mask)
@@ -118,7 +140,7 @@ def test_open(w):
   assert link1.mask == IN_UNMOUNT | IN_ONLYDIR | IN_EXCL_UNLINK | IN_IGNORED | IN_MOVE | IN_DELETE | IN_CREATE
   assert link1.watch == watch
   wd = link1.wd
-  assert wd.callbacks['testfile'] == [(link1.mask, link1.handle_event)]
+  assert wd.callbacks['testfile'] == [link1]
   assert wd.mask == link1.mask
   assert wd.watcher == w
   watchdesc = wd.wd
@@ -131,7 +153,7 @@ def test_open(w):
   assert link2.mask == IN_OPEN | IN_CLOSE
   assert link2.watch == watch
   wd = link2.wd
-  assert wd.callbacks[None] == [(link2.mask, link2.handle_event)]
+  assert wd.callbacks[None] == [link2]
   assert wd.mask == link2.mask
   assert wd.watcher == w
   watchdesc = wd.wd
@@ -164,29 +186,72 @@ def test_linkchange(w):
   assert (wt.path, wt.name) == ('testfile', None)
   assert w1.wd == w2.wd == w3.wd == w4.wd
   desc = w1.wd
-  linkmask = inotify.IN_MOVE | inotify.IN_DELETE | inotify.IN_CREATE | inotify.IN_ONLYDIR
-  assert desc.callbacks[P('link1')] == [(linkmask, w1.handle_event)]
-  assert desc.callbacks[P('link2')] == [(linkmask, w2.handle_event)]
-  assert desc.callbacks[P('link3')] == [(linkmask, w3.handle_event)]
+  linkmask = IN_UNMOUNT | IN_ONLYDIR | IN_EXCL_UNLINK | IN_IGNORED | IN_MOVE | IN_DELETE | IN_CREATE
+  for p, l in {'link1':w1, 'link2':w2, 'link3':w3}.items():
+    assert desc.callbacks[p] == [l]
+    assert l.mask == linkmask
 
   os.rename('link2', 'link2new')
   e = w.read()
   assert len(e) == 1
   e1 = e[0]
-  assert e1.link_changed
+  assert e1.path_changed
+  assert e1.path_moved
   assert len(w._watchdescriptors) == 1
-  assert len(watch.links) == 1
-  assert len(list(itertools.chain(*watch.links[0].wd.callbacks.values()))) == 1
+  assert len(watch.links) == 2
+  assert len(list(itertools.chain(*watch.links[0].wd.callbacks.values()))) == 2
 
   os.rename('link1', 'link1new')
   e = w.read()
   assert len(e) == 1
   e1 = e[0]
-  assert e1.link_changed
-  assert len(w._watchdescriptors) == 0
-  assert len(watch.links) == 0
+  assert e1.path_changed
+  assert e1.path_moved
+  assert len(w._watchdescriptors) == 1
+  assert len(watch.links) == 1
 
-  # ipythonembed()
+  os.rename('link2new', 'link1')
+  e = w.read()
+  assert len(e) == 1
+  e1 = e[0]
+  assert e1.path_moved
+  assert len(watch.links) == 4
+
+
+def test_multi(w):
+  open('file2', 'w').close()
+  os.symlink('file2', 'link2')
+  os.symlink(str(P.cwd()['link2']), 'link3')
+  os.symlink('testfile', 'link4')
+  
+  w.add('link3', IN_OPEN)
+  w.add('link4', IN_OPEN)
+
+  open('file2').close()
+  evts = w.read()
+  assert len(evts) == 1
+  e = evts[0]
+  assert e.open
+  assert e.path == 'link3'
+
+  open('testfile').close()
+  evts = w.read()
+  assert len(evts) == 1
+  e = evts[0]
+  assert e.open
+  assert e.path == 'link4'
+
+  assert len(w._watchdescriptors) == 5
+
+  os.remove('link3')
+  os.symlink('link4', 'link3')
+
+  evts = w.read()
+  open('testfile').close()
+  evts.extend(w.read())
+  assert len(evts) == 4
+  print(evts)
+  
 
 # def test_move(w):
 #   w.add('.', inotify.IN_MOVE)

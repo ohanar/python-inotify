@@ -78,6 +78,15 @@ class Event(object):
         self.mask = raw.mask
         self.cookie = raw.cookie
         self.name = raw.name
+
+    @property
+    def mask_list(self):
+        return decode_mask(self.mask)
+
+    def __eq__(self, other):
+        return isinstance(other, Event) and self.path == other.path and \
+            self.mask == other.mask and self.cookie == other.cookie and \
+            self.name == other.name and self.raw == other.raw
     
     def __repr__(self):
         r = 'Event(path={}, mask={}'.format(repr(self.path), '|'.join(decode_mask(self.mask)))
@@ -104,7 +113,7 @@ class PathWatcher (object):
         self._watchdescriptors = {}
         self._paths = {}
         self._pending_watch_removes = 0
-        self._reconnect = []
+        self._reconnect = set()
         self.events = []
 
     def fileno(self):
@@ -136,13 +145,13 @@ class PathWatcher (object):
         self._paths[path] = _PathWatch(self, path, mask, remember_curdir)
         return str(path)
 
-    def _createwatch(self, path, name, mask, callback):
+    def _createwatch(self, path, link):
         'create a new _Descriptor for path'
-        wd = _inotify.add_watch(self.fd, str(path), mask | IN_MASK_ADD)
+        wd = _inotify.add_watch(self.fd, str(path), link.mask | IN_MASK_ADD)
         if not wd in self._watchdescriptors:
             self._watchdescriptors[wd] = _Descriptor(self, wd)
         desc = self._watchdescriptors[wd]
-        desc.add_callback(mask, name, callback)
+        desc.register_link(link)
         return desc
 
     def _removewatch(self, descriptor):
@@ -165,7 +174,7 @@ class PathWatcher (object):
 
     def _reconnect_required(self, watch):
         '''Register a watch to be .reconnect()'ed after event processing is finished'''
-        self._reconnect.append(watch)
+        self._reconnect.add(watch)
 
     def read(self, block=True, bufsize=None):
         '''Read a list of queued inotify events.
@@ -182,9 +191,6 @@ class PathWatcher (object):
         elif bufsize == 0:
             bufsize = None
 
-        if not len(self._watchdescriptors):
-            raise NoFilesException("There are no files to watch")
-
         # We call _inotify.read once at first. If we are expecting an
         # IN_IGNORE, we read it again until we get all pening
         # IN_IGNOREs. Secondly, if a
@@ -200,13 +206,21 @@ class PathWatcher (object):
             e, self.events = self.events, []
             return e
         self._do_reconnect()
+
+        if not len(self._watchdescriptors):
+            raise NoFilesException("There are no files to watch")
+
+        lastevent = None
         do1 = True
         while do1 or self._pending_watch_removes > 0 or self._reconnect:
             do1 = False
             do2 = True
             while do2 or self._pending_watch_removes > 0:
                 do2 = False
-                self.events.extend(self._read_events(bufsize))
+                for e in self._read_events(bufsize):
+                    if e == lastevent:
+                        continue
+                    self.events.append(e)
             self._do_reconnect()
         events, self.events = self.events, []
         return events
@@ -221,11 +235,10 @@ class PathWatcher (object):
                 yield e
 
     def _do_reconnect(self):
-        r = self._reconnect
         # Do not just clear the list, but replace it, because the
         # reconnect call can cause new pathwatches to require
         # reconnection.
-        self._reconnect = []
+        r, self._reconnect = self._reconnect, set()
         for w in r:
             w.reconnect()
 
@@ -350,7 +363,8 @@ class _PathWatch (object):
             name = rest.parts[0]
         self.links.append(_Link(len(self.links), self, mask, path, name, rest, linkcount))
         
-    _eventmap = {IN_MOVE | IN_MOVE_SELF: IN_PATH_MOVED,
+    _eventmap = {IN_MOVED_FROM | IN_MOVE_SELF: IN_PATH_MOVED_FROM,
+                 IN_MOVED_TO: IN_PATH_MOVED_TO,
                  IN_DELETE | IN_DELETE_SELF | IN_IGNORED: IN_PATH_DELETE,
                  IN_CREATE: IN_PATH_CREATE,
                  IN_UNMOUNT: IN_PATH_UNMOUNT,
@@ -359,17 +373,20 @@ class _PathWatch (object):
         if self.watch_complete == 2 and link.idx == len(self.links) - 1:
             assert event.mask & (self.mask | IN_IGNORED)
             if event.mask & IN_IGNORED:
-                self._poplinks_from(-1)
+                self._poplinks_from(link.idx)
+                if event.mask & IN_UNMOUNT:
+                    self._register_reconnect()
             if event.mask & self.mask:
                 yield Event(event, str(self.path))
         else:
             i = link.idx
             if event.mask & (IN_MOVE | IN_DELETE | IN_CREATE):
+                # something happened to a directory entry
                 i += 1
-            if i < len(self.links):
-                reconnect = event.mask & (IN_MOVED_TO|IN_CREATE|IN_MOVE_SELF|IN_DELETE_SELF)
-                self._poplinks_from(i, reconnect=reconnect)
-            if not event.mask & (IN_MOVE_SELF | IN_DELETE_SELF | IN_IGNORED):
+            self._poplinks_from(i)
+            if event.mask & (IN_MOVED_TO|IN_CREATE|IN_UNMOUNT):
+                self._register_reconnect()
+            if not event.mask & (IN_MOVE_SELF | IN_DELETE_SELF | IN_IGNORED | IN_UNMOUNT):
                 name = str(PosixPath(link.path)[link.name])
             else:
                 name = link.path
@@ -379,15 +396,21 @@ class _PathWatch (object):
             evttype |= (event.mask & IN_ISDIR)
             yield Event(syntheticevent(mask=evttype, cookie=0, name=name, wd=event.wd), str(self.path))
 
-    def _poplinks_from(self, startidx, reconnect=True):
+    def _poplinks_from(self, startidx):
+        if startidx >= len(self.links):
+            return
+        self.watch_complete = min(1, self.watch_complete)
         for p in self.links[startidx:]:
             p.remove()
         del self.links[startidx:]
+
+    def _register_reconnect(self):
         self.watch_complete = 0
         self.watcher._reconnect_required(self)
 
     def _queue_overflow(self):
         self._poplinks_from(1)
+        self._register_reconnect()
 
     def update(self, newmask=0, remember_curdir=None):
         self._update_curdir(remember_curdir)
@@ -404,6 +427,9 @@ class _PathWatch (object):
 
     def remove(self):
         self._poplinks_from(0)
+        # in principle we can still be reconnected, but we don't
+        # expect that to actually happen
+        self._register_reconnect()
 
     def __repr__(self):
         return '<_PathWatch for {}>'.format(str(self.path))
@@ -429,7 +455,9 @@ class _Link (object):
         self.name = name
         self.rest = str(rest)
         self.linkcount = linkcount
-        self.wd = watch.watcher._createwatch(path, name, mask, self.handle_event)
+        assert isinstance(self.name, (basestring, NoneType))
+        assert name is None or not '/' in name
+        self.wd = watch.watcher._createwatch(path, self)
 
     def handle_event(self, event):
         # This method can be called after the _Link object has been .remove()'d
@@ -441,7 +469,7 @@ class _Link (object):
             yield e
 
     def remove(self):
-        self.wd.remove_callback(self.name, self.handle_event)
+        self.wd.remove_link(self)
         self.wd = None
 
     def printname(self):
@@ -478,21 +506,15 @@ class _Descriptor (object):
         # cumbersome to implement.
         self.callbacks = {}
 
-    def add_callback(self, mask, name, callback):
-        # If the callback is to a path link element, mask will include
-        # IN_ONLYDIR so we could remove that here. However the IN_ONLYDIR flag
-        # can not be returned by inotify events so keeping it in does no harm.
+    def register_link(self, link):
         assert self.active
-        assert isinstance(name, (basestring, NoneType))
-        assert name is None or not '/' in name
-        self.mask |= mask
-        self.callbacks.setdefault(name, []).append((mask, callback))
+        self.mask |= link.mask
+        self.callbacks.setdefault(link.name, []).append(link)
 
-    def remove_callback(self, name, callback):
-        idx = [c == callback for m,c in self.callbacks[name]].index(True)
-        del self.callbacks[name][idx]
-        if not self.callbacks[name]:
-            del self.callbacks[name]
+    def remove_link(self, link):
+        self.callbacks[link.name].remove(link)
+        if not self.callbacks[link.name]:
+            del self.callbacks[link.name]
         if not self.callbacks:
             self.watcher._signal_empty_watch(self)
 
@@ -501,10 +523,10 @@ class _Descriptor (object):
             self.active = False
         # The list of callbacks can be modified from the handlers, so make a
         # copy.
-        for m, c in list(self.callbacks.get(event.name, ())):
-            if not event.mask & (m | IN_IGNORED):
+        for l in list(self.callbacks.get(event.name, ())):
+            if not event.mask & (l.mask | IN_IGNORED):
                 continue
-            for e in c(event):
+            for e in l.handle_event(event):
                 yield e
         if event.mask & IN_IGNORED:
             assert not self.callbacks
@@ -512,7 +534,7 @@ class _Descriptor (object):
             self.watcher._removewatch(self)
         
     def __repr__(self):
-        names = ', '.join(c.__self__.printname() for lst in self.callbacks.values() for m, c in lst)
+        names = ', '.join(set(c.__self__.printname() for lst in self.callbacks.values() for m, c in lst))
         return '<_Descriptor for wd {}: {}>'.format(self.wd, names)
 
 

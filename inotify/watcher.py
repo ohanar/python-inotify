@@ -93,6 +93,10 @@ class Event(object):
         else:
             return None
 
+    @property
+    def mask_list(self):
+        return constants.decode_mask(self.mask)
+
     def __init__(self, raw, watch):
         self.raw = raw
         self.watch = watch
