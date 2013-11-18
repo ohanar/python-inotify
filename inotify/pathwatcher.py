@@ -218,9 +218,13 @@ class PathWatcher (object):
             while do2 or self._pending_watch_removes > 0:
                 do2 = False
                 for e in self._read_events(bufsize):
-                    if e == lastevent:
+                    # only filter duplicate path_changed events to
+                    # prevent hiding of bugs that may cause duplicate
+                    # other events to be created.
+                    if e.path_changed and e == lastevent:
                         continue
                     self.events.append(e)
+                    lastevent = e
             self._do_reconnect()
         events, self.events = self.events, []
         return events
@@ -259,12 +263,13 @@ class PathWatcher (object):
 
     def remove(self, path):
         '''Remove watch on the given path.'''
+        path = PosixPath(path)
         self._paths[path].remove()
         del self._paths[path]
 
     def watches(self):
         '''return an iterator of all active watches'''
-        return self._path.keys()
+        return [str(p) for p in self._paths.keys()]
 
     def getmask(self, path):
         '''returns the mask for the watch on the given path'''
@@ -272,6 +277,8 @@ class PathWatcher (object):
 
     def close(self):
         'close this watcher instance'
+        if self.fd is None:
+            return
         os.close(self.fd)
         self._watchdescriptors.clear()
         self._paths.clear()
@@ -427,9 +434,6 @@ class _PathWatch (object):
 
     def remove(self):
         self._poplinks_from(0)
-        # in principle we can still be reconnected, but we don't
-        # expect that to actually happen
-        self._register_reconnect()
 
     def __repr__(self):
         return '<_PathWatch for {}>'.format(str(self.path))
@@ -523,7 +527,10 @@ class _Descriptor (object):
             self.active = False
         # The list of callbacks can be modified from the handlers, so make a
         # copy.
-        for l in list(self.callbacks.get(event.name, ())):
+        callbacks = list(self.callbacks.get(event.name, ()))
+        if event.name != None:
+            callbacks.extend(self.callbacks.get(None, ()))
+        for l in callbacks:
             if not event.mask & (l.mask | IN_IGNORED):
                 continue
             for e in l.handle_event(event):
@@ -534,7 +541,7 @@ class _Descriptor (object):
             self.watcher._removewatch(self)
         
     def __repr__(self):
-        names = ', '.join(set(c.__self__.printname() for lst in self.callbacks.values() for m, c in lst))
+        names = ', '.join(set(l.printname() for lst in self.callbacks.values() for l in lst))
         return '<_Descriptor for wd {}: {}>'.format(self.wd, names)
 
 

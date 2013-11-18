@@ -111,8 +111,10 @@ def makelinkchain(target, directory, numlinks):
 
 
 @pytest.fixture
-def w():
-  return inotify.PathWatcher()
+def w(request):
+  w = inotify.PathWatcher()
+  request.addfinalizer(lambda w=w: w.close())
+  return w
 
 
 def test_constants():
@@ -122,6 +124,12 @@ def test_constants():
   assert not c_events & path_events
   assert path_events > c_events
 
+def test_repr(w):
+  w.add('.', IN_ALL_EVENTS)
+  repr(w)
+  repr(w._paths)
+  repr(w._watchdescriptors)
+  repr(next(iter(w._paths.values())).links)
 
 def test_open(w):
   mask = IN_OPEN | IN_CLOSE
@@ -160,7 +168,8 @@ def test_open(w):
   assert w._watchdescriptors[watchdesc] == wd
   
   open('testfile').close()
-  ev1, ev2 = w.read(block=False)
+  evts = w.read(block=False)
+  ev1, ev2 = evts
   assert ev1.open
   assert ev2.close
   assert ev2.close_nowrite
@@ -250,55 +259,55 @@ def test_multi(w):
   open('testfile').close()
   evts.extend(w.read())
   assert len(evts) == 4
-  print(evts)
   
 
-# def test_move(w):
-#   w.add('.', inotify.IN_MOVE)
-#   assert w.read(0) == []
-#   os.rename('testfile', 'targetfile')
-#   ev = w.read(0)
-#   for e in ev:
-#     if e.name == 'testfile':
-#       assert e.moved_from
-#     if e.name == 'targetfile':
-#       assert e.moved_to
-#   assert ev[0].cookie and ev[0].cookie == ev[1].cookie
+def test_move(w):
+  w.add('.', IN_MOVE)
+  assert w.read(0) == []
+  os.rename('testfile', 'targetfile')
+  ev = w.read()
+  for e in ev:
+    if e.name == 'testfile':
+      assert e.moved_from
+    if e.name == 'targetfile':
+      assert e.moved_to
+  assert ev[0].cookie and ev[0].cookie == ev[1].cookie
 
 
-# def test_alias(w):
-#   '''The inotify system maps watch requests to aliases (e.g. symlinks) to the
-#   same watch descriptor, so we need to be sure that a watch is only really
-#   removed if all paths it is watching are dismissed.'''
+def test_alias(w):
+  '''The inotify system maps watch requests to aliases (e.g. symlinks) to the
+  same watch descriptor, so we need to be sure that a watch is only really
+  removed if all paths it is watching are dismissed.'''
 
-#   os.symlink('testfile', 'testlink')
-#   w1 = w.add('testfile', inotify.IN_OPEN)
-#   w2 = w.add('testlink', inotify.IN_OPEN)
-#   assert w1 == w2
-#   assert set(w.paths()) == {'testfile', 'testlink'}
-#   assert w.get_watch('testfile') == w.get_watch('testlink')
-#   assert len(w.watches()) == 1
-#   open('testlink').close()
-#   ev = w.read(0)
-#   assert len(ev) == 1
-#   w.remove_path('testfile')
-#   open('testlink').close()
-#   ev = w.read(0)
-#   assert len(ev) == 1
+  os.symlink('testfile', 'testlink')
+  w1 = w.add('testfile', inotify.IN_OPEN)
+  w2 = w.add('testlink', inotify.IN_OPEN)
+  assert set(w.watches()) == {'testfile', 'testlink'}
+  open('testlink').close()
+  ev = w.read(0)
+  assert len(ev) == 2
+  w.remove('testfile')
+  open('testlink').close()
+  ev = w.read(0)
+  assert len(ev) == 1
 
 
-# def test_delete(w):
-#     w.add('testfile', inotify.IN_DELETE_SELF)
-#     os.remove('testfile')
-#     ev1, ev2 = w.read(0)
-#     assert ev1.delete_self
-#     assert ev2.ignored
-#     assert w.num_watches() == 0
+def test_delete(w):
+    w.add('testfile', IN_DELETE_SELF | IN_IGNORED)
+    os.remove('testfile')
+    evts = w.read(0)
+    ev1, ev2, ev3 = evts
+    assert ev1.delete_self
+    assert ev2.ignored
+    assert ev3.path_delete
+    assert len(w.watches()) == 1
 
-# def test_wrongpath(w):
-#     with pytest.raises(OSError) as excinfo:
-#         w.add('nonexistant', inotify.IN_OPEN)
-#     assert excinfo.value.errno == os.errno.ENOENT
-#     with pytest.raises(OSError) as excinfo:
-#         w.add_all('nonexistant', inotify.IN_OPEN)
-#     assert excinfo.value.errno == os.errno.ENOENT
+def test_wrongpath(w):
+    w.add('nonexistant', IN_OPEN)
+    assert w.read(block=False) == []
+    open('nonexistant', 'w').close()
+    evts = w.read()
+    ev1 = evts[0]
+    assert ev1.path_create
+
+
