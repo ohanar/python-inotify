@@ -269,18 +269,18 @@ class Watcher(object):
         except KeyError:
             raise InotifyWatcherException("watchdescriptor {} not known".format(wd))
 
-    def read(self, bufsize=None):
+    def read(self, block=True):
         '''Read a list of queued inotify events.
 
-        If bufsize is zero, only return those events that can be read
-        immediately without blocking.  Otherwise, block until events are
-        available.'''
+        If block is True (the default), block if no events are
+        available immediately. Else return an empty list if no events
+        are available.'''
 
         if not len(self._watches):
             raise NoFilesException("There are no files to watch")
 
         events = []
-        for evt in inotify.read(self.fd, bufsize):
+        for evt in inotify.read(self.fd, block=block):
             watch = None if evt.wd == -1 else self._watches[evt.wd]
             event = Event(evt, watch)
             events.append(event)
@@ -406,8 +406,8 @@ class AutoWatcher(Watcher):
         super(AutoWatcher, self).__init__()
         self.addfilter = addfilter
 
-    def read(self, bufsize=None):
-        events = super(AutoWatcher, self).read(bufsize)
+    def read(self, block=False):
+        events = super(AutoWatcher, self).read(block)
         for evt in events:
             if evt.mask & inotify.IN_ISDIR and evt.mask & inotify.IN_CREATE:
                 if self.addfilter is None or self.addfilter(evt):

@@ -20,6 +20,8 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#define READ_BUF_SIZE 64*1024
+
 /* for older pythons */
 #ifndef Py_TYPE
 	#define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
@@ -30,6 +32,11 @@
 	#define PyVarObject_HEAD_INIT(type, size) \
 		PyObject_HEAD_INIT(type) size,
 #endif
+
+#define min(a,b) \
+ ({ __typeof__ (a) _a = (a); \
+		 __typeof__ (b) _b = (b); \
+	 _a < _b ? _a : _b; })
 
 
 static PyObject *init(PyObject *self, PyObject *args)
@@ -285,7 +292,7 @@ static void define_consts(PyObject *dict)
 }
 
 // the event struct is not really doing anything that couldn't be done with a
-// python named tuple, it should be replaced.
+// python named tuple, it should probably be replaced.
 struct event {
 	PyObject_HEAD
 	PyObject *wd;
@@ -455,125 +462,135 @@ static PyTypeObject event_type = {
 	event_new,          /* tp_new */
 };
 	
-PyObject *read_events(PyObject *self, PyObject *args)
+static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 {
-	PyObject *ctor_args = NULL;
-	PyObject *pybufsize = NULL;
+	static char buffer[READ_BUF_SIZE];
 	PyObject *ret = NULL;
-	int bufsize = 65536;
-	char *buf = NULL;
-	int nread, pos;
+	PyObject *ctor_args = NULL;
+	int block = 1;
+	int readable = 0;
+	int pos, read_total, ioctl_retval;
 	int fd;
 
-	if (!PyArg_ParseTuple(args, "i|O:read", &fd, &pybufsize))
+	static char *kwlist[] = {"fd", "block", NULL};
+
+#if PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 3
+	const char *format = "i|$p:read";
+#else
+	const char* format = "i|i:read";
+	Py_ssize_t argc = PyTuple_Size(args);
+	if (argc == -1)
+		goto bail;
+	if (argc > 1) {
+		PyErr_SetString(PyExc_TypeError, "read() takes exactly 1 positional argument but more were given");
+		goto bail;
+	}
+#endif
+
+	if (!PyArg_ParseTupleAndKeywords(args, keywds, format, kwlist, &fd, &block))
 		goto bail;
 
-	if (pybufsize && pybufsize != Py_None)
-		bufsize = PyLong_AsLong(pybufsize);
-	
 	ret = PyList_New(0);
 	if (ret == NULL)
 		goto bail;
 	
-	if (bufsize <= 0) {
-		int r;
-		
-		Py_BEGIN_ALLOW_THREADS
-		r = ioctl(fd, FIONREAD, &bufsize);
-		Py_END_ALLOW_THREADS
-		
-		if (r == -1) {
-			PyErr_SetFromErrno(PyExc_OSError);
-			goto bail;
-		}
-		if (bufsize == 0)
-			goto done;
-	}
-	else {
-		static long name_max;
-		static long name_fd = -1;
-		long min;
-		
-		if (name_fd != fd) {
-			name_fd = fd;
-			Py_BEGIN_ALLOW_THREADS
-			name_max = fpathconf(fd, _PC_NAME_MAX);
-			Py_END_ALLOW_THREADS
-		}
-		
-		min = sizeof(struct inotify_event) + name_max + 1;
-		
-		if (bufsize < min) {
-			PyErr_Format(PyExc_ValueError, "bufsize must be at least %d",
-						 (int) min);
-			goto bail;
-		}
-	}
+	ctor_args = PyTuple_New(0);
+	if (ctor_args == NULL)
+		goto bail;
 
-	buf = alloca(bufsize);
-	
 	Py_BEGIN_ALLOW_THREADS
-	nread = read(fd, buf, bufsize);
+	ioctl_retval = ioctl(fd, FIONREAD, &readable);
 	Py_END_ALLOW_THREADS
 
-	if (nread == -1) {
+	if (ioctl_retval < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
 		goto bail;
 	}
 
-	ctor_args = PyTuple_New(0);
-
-	if (ctor_args == NULL)
-		goto bail;
-	
-	pos = 0;
-	
-	while (pos < nread) {
-		struct inotify_event *in = (struct inotify_event *) (buf + pos);
-		struct event *evt;
-		PyObject *obj;
-
-		obj = PyObject_CallObject((PyObject *) &event_type, ctor_args);
-
-		if (obj == NULL)
-			goto bail;
-
-		evt = (struct event *) obj;
-
-		evt->wd = PyLong_FromLong(in->wd);
-		evt->mask = PyLong_FromLong(in->mask);
-		if (in->mask & IN_MOVE)
-			evt->cookie = PyLong_FromLong(in->cookie);
-		else {
-			Py_INCREF(Py_None);
-			evt->cookie = Py_None;
-		}
-		if (in->len)
-			evt->name = PyUnicode_FromString(in->name);
-		else {
-			Py_INCREF(Py_None);
-			evt->name = Py_None;
-		}
-
-		if (!evt->wd || !evt->mask || !evt->cookie || !evt->name)
-			goto mybail;
-
-		if (PyList_Append(ret, obj) == -1)
-			goto mybail;
-
-		pos += sizeof(struct inotify_event) + in->len;
-		Py_DECREF(obj);
-		continue;
-
-	mybail:
-		Py_CLEAR(evt->wd);
-		Py_CLEAR(evt->mask);
-		Py_CLEAR(evt->cookie);
-		Py_CLEAR(evt->name);
-		Py_DECREF(obj);
-
-		goto bail;
+	if (block == 0 && readable == 0) {
+		goto done;
 	}
+
+	read_total = 0;
+	pos = 0;
+
+	do {
+		int nread, size;
+		int toread = min(readable - read_total, READ_BUF_SIZE - pos);
+
+		Py_BEGIN_ALLOW_THREADS
+		nread = read(fd, buffer + pos, toread);
+		Py_END_ALLOW_THREADS
+
+		if (nread == -1) {
+			PyErr_SetFromErrno(PyExc_OSError);
+			goto bail;
+		}
+
+		read_total += nread;
+		size = nread + pos;
+
+		while (pos < size) {
+			struct inotify_event *in = (struct inotify_event *) (buffer + pos);
+
+			if (size - pos < sizeof(struct inotify_event) ||
+					size - pos < sizeof(struct inotify_event) + in->len) {
+				memcpy(buffer, buffer + pos, size - pos);
+				pos = size - pos;
+				goto nextread;
+			}
+			
+			struct event *evt;
+			PyObject *obj;
+
+			obj = PyObject_CallObject((PyObject *) &event_type, ctor_args);
+
+			if (obj == NULL)
+				goto bail;
+
+			evt = (struct event *) obj;
+
+			evt->wd = PyLong_FromLong(in->wd);
+			evt->mask = PyLong_FromLong(in->mask);
+			if (in->mask & IN_MOVE)
+				evt->cookie = PyLong_FromLong(in->cookie);
+			else {
+				Py_INCREF(Py_None);
+				evt->cookie = Py_None;
+			}
+			if (in->len)
+				evt->name = PyUnicode_FromString(in->name);
+			else {
+				Py_INCREF(Py_None);
+				evt->name = Py_None;
+			}
+
+			if (!evt->wd || !evt->mask || !evt->cookie || !evt->name)
+				goto mybail;
+
+			if (PyList_Append(ret, obj) == -1)
+				goto mybail;
+
+			pos += sizeof(struct inotify_event) + in->len;
+			Py_DECREF(obj);
+			continue;
+
+		mybail:
+			Py_CLEAR(evt->wd);
+			Py_CLEAR(evt->mask);
+			Py_CLEAR(evt->cookie);
+			Py_CLEAR(evt->name);
+			Py_DECREF(obj);
+
+			goto bail;
+		}
+
+		pos = 0;
+
+	nextread:
+		;
+
+	} while (read_total < readable);
 	
 	goto done;
 
@@ -588,25 +605,23 @@ done:
 
 PyDoc_STRVAR(
 	read_doc,
-	"read(fd, bufsize[=65536]) -> list_of_events\n"
+	"read(fd, *, block=True) -> list_of_events\n"
 	"\n"
-	"\nRead inotify events from a file descriptor.\n"
+	"Read inotify events from a file descriptor.\n"
 	"\n"
 	"        fd: file descriptor returned by init()\n"
-	"        bufsize: size of buffer to read into, in bytes\n"
+	"        block: If true, block if no events are available immediately.\n"
 	"\n"
-	"Return a list of event objects.\n"
-	"\n"
-	"If bufsize is > 0, block until events are available to be read.\n"
-	"Otherwise, immediately return all events that can be read without\n"
-	"blocking.");
+	"Return a list of event objects. read() will always return as many events as "
+	"are available for reading at the moment the call to read() is made. \n"
+	"\n");
 
 
 static PyMethodDef methods[] = {
 	{"init", init, METH_VARARGS, init_doc},
 	{"add_watch", add_watch, METH_VARARGS, add_watch_doc},
 	{"remove_watch", remove_watch, METH_VARARGS, remove_watch_doc},
-	{"read", read_events, METH_VARARGS, read_doc},
+	{"read", (PyCFunction) read_events, METH_VARARGS | METH_KEYWORDS, read_doc},
 	{"decode_mask", pydecode_mask, METH_VARARGS, decode_mask_doc},
 	{NULL},
 };
