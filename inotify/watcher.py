@@ -28,6 +28,7 @@ __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 from . import constants
 from . import _inotify as inotify
+from . import event_properties, watch_properties
 import array
 import errno
 import fcntl
@@ -35,39 +36,6 @@ import os
 import termios
 
 
-# Inotify flags that can be specified on a watch and can be returned in an event
-_inotify_props = {
-    'access': 'File was accessed',
-    'modify': 'File was modified',
-    'attrib': 'Attribute of a directory entry was changed',
-    'close': 'File was closed',
-    'close_write': 'File was closed after being written to',
-    'close_nowrite': 'File was closed without being written to',
-    'open': 'File was opened',
-    'move': 'Directory entry was renamed',
-    'moved_from': 'Directory entry was renamed from this name',
-    'moved_to': 'Directory entry was renamed to this name',
-    'create': 'Directory entry was created',
-    'delete': 'Directory entry was deleted',
-    'delete_self': 'The watched directory entry was deleted',
-    'move_self': 'The watched directory entry was renamed',
-    }
-
-# Inotify flags that can only be returned in an event
-_event_props = {
-    'unmount': 'Directory was unmounted, and can no longer be watched',
-    'q_overflow': 'Kernel dropped events due to queue overflow',
-    'ignored': 'Directory entry is no longer being watched',
-    'isdir': 'Event occurred on a directory',
-    }
-_event_props.update(_inotify_props)
-
-# Inotify flags that can only be specified in a watch
-_watch_props = {
-    'dont_follow': "Don't dereference pathname if it is a symbolic link",
-    'excl_unlink': "Don't generate events after the file has been unlinked",
-    }
-_watch_props.update(_inotify_props)
 
 def _make_getter(name, doc):
     def getter(self, mask=constants['IN_' + name.upper()]):
@@ -78,27 +46,25 @@ def _make_getter(name, doc):
 
 
 
-
-
 class Event(object):
     '''Derived inotify event class.
 
-    The following fields are available:
+    The following fields and properties are available:
 
-        mask: event mask, indicating what kind of event this is
+    mask: event mask, indicating what kind of event this is
 
-        cookie: rename cookie, if a rename-related event
+    cookie: rename cookie, if a rename-related event
 
-        fullpath: the full path of the file or directory to which the event
-        occured. If this watch has more than one path, a path is chosen
-        arbitrarily.
+    fullpath: the full path of the file or directory to which the event
+    occured. If this watch has more than one path, a path is chosen
+    arbitrarily.
 
-        paths: a list of paths that resolve to the watched file/directory
+    paths: a list of paths that resolve to the watched file/directory
 
-        name: name of the directory entry to which the event occurred
-        (may be None if the event happened to a watched directory)
+    name: name of the directory entry to which the event occurred
+    (may be None if the event happened to a watched directory)
 
-        wd: watch descriptor that triggered this event
+    wd: watch descriptor that triggered this event
 
     '''
 
@@ -112,14 +78,24 @@ class Event(object):
 
     @property
     def paths(self):
-        return list(self.watch.paths)
+        if self.watch:
+            return list(self.watch.paths)
+        return []
 
     @property
     def fullpath(self):
-        p = self.paths[0]
-        if self.name:
-            p += '/' + self.name
-        return p
+        pts = self.paths
+        if pts:
+            p = pts[0]
+            if self.name:
+                p += '/' + self.name
+            return p
+        else:
+            return None
+
+    @property
+    def mask_list(self):
+        return constants.decode_mask(self.mask)
 
     def __init__(self, raw, watch):
         self.raw = raw
@@ -133,7 +109,7 @@ class Event(object):
         return ('Event(paths={}, ' + r[r.find('(')+1:]).format(repr(self.paths))
 
 
-for name, doc in _event_props.items():
+for name, doc in event_properties.items():
     setattr(Event, name, property(_make_getter(name, doc), doc=doc))
 
 
@@ -201,12 +177,9 @@ class _Watch(object):
         return '{}.Watch({}, {})'.format(__name__, self._watcher, self.wd)
 
 
-for name, doc in _watch_props.items():
+for name, doc in watch_properties.items():
     setattr(_Watch, name, property(_make_getter(name, doc), doc=doc))
 
-
-
-  
 
 
 class Watcher(object):
@@ -300,8 +273,8 @@ class Watcher(object):
 
         os.close(self.fd)
         self.fd = None
-        self._paths = None
-        self._watches = None
+        self._paths.clear()
+        self._watches.clear()
 
     def num_paths(self):
         '''Return the number of explicitly watched paths.'''
@@ -320,12 +293,12 @@ class Watcher(object):
         return self._paths.keys()
 
     def get_watch(self, path):
-        'Return the watcher for a given path'
+        'Return the watch for a given path'
         return self._paths[path]
 
     def __del__(self):
         if self.fd is not None:
-            os.close(self.fd)
+            self.close()
 
     ignored_errors = [errno.ENOENT, errno.EPERM, errno.ENOTDIR]
 
@@ -451,9 +424,7 @@ class Threshold(object):
         return self.readable() >= self.threshold
 
 
-class InotifyWatcherException (Exception):
-    pass
 
-class NoFilesException (InotifyWatcherException):
+class NoFilesException (Exception):
     '''This inotify instance does not watch anything.'''
     pass

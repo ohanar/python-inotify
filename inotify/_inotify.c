@@ -168,7 +168,7 @@ PyDoc_STRVAR(
 #define bit_name(x) {x, #x}
 
 static struct {
-	int bit;
+	unsigned int bit;
 	const char *name;
 	PyObject *pyname;
 } bit_names[] = {
@@ -247,7 +247,7 @@ static char doc[] = "Low-level inotify interface wrappers.";
 
 static void define_const(PyObject *dict, const char *name, uint32_t val)
 {
-	PyObject *pyval = PyLong_FromLong(val);
+	PyObject *pyval = PyLong_FromUnsignedLong(val);
 	PyObject *pyname = PyUnicode_FromString(name);
 
 	if (!pyname || !pyval)
@@ -465,8 +465,8 @@ static PyTypeObject event_type = {
 static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 {
 	static char buffer[READ_BUF_SIZE];
-	PyObject *ret = NULL;
 	PyObject *ctor_args = NULL;
+	PyObject *ret = NULL;
 	int block = 1;
 	int readable = 0;
 	int pos, read_total, ioctl_retval;
