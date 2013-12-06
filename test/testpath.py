@@ -43,7 +43,6 @@ del un, ver, testdir, idx
 
 
 import inotify
-import inotify._inotify
 
 globals().update(inotify.constants)
 
@@ -62,8 +61,10 @@ more needed concurrency tests:
   occurs due to ConcurrentFilesystemModificationError, and also make
   sure we wait for the creation event and restore the watch.
 
-- Can _inotify.read be interrupted without losing events or losing
+- Can inotify.read be interrupted without losing events or losing
   consistency?
+  ----> only a blocking read can now safely be interrupted, but there
+  should be no specific need to interrupt a non-blocking read.
 
 - Unmounting of a filesystem mounted on a watched directory only
   generates events on the mount point itself, not on the parent
@@ -81,10 +82,7 @@ more needed concurrency tests:
 """
 
 
-# from IPython.terminal.ipapp import TerminalIPythonApp
-from IPython import embed as ipythonembed
-# ipapp = TerminalIPythonApp.instance()
-# ipapp.initialize(argv=[]) # argv=[] instructs IPython to ignore sys.argv
+# from IPython import embed as ipythonembed
 
 
 @pytest.fixture(autouse=True)
@@ -118,8 +116,8 @@ def w(request):
 
 
 def test_constants():
-  assert IN_PATH_MOVED_TO > inotify._inotify.IN_ALL_EVENTS
-  c_events = functools.reduce(operator.or_, (v for k,v in inotify._inotify.__dict__.items() if k.startswith('IN_')))
+  assert IN_PATH_MOVED_TO > inotify.inotify.IN_ALL_EVENTS
+  c_events = functools.reduce(operator.or_, (v for k,v in inotify.inotify.__dict__.items() if k.startswith('IN_')))
   path_events = functools.reduce(operator.or_, (v for k,v in inotify.constants.items() if k.startswith('IN_PATH_')))
   assert not c_events & path_events
   assert path_events > c_events
@@ -191,7 +189,7 @@ def test_linkchange(w):
   watch = w._paths[P('link1')]
   assert len(watch.links) == 5
   w1, w2, w3, w4, wt  = watch.links
-  assert [w.name for w in (w1, w2, w3, w4)] == 'link1 link2 link3 testfile'.split()
+  assert [wx.name for wx in (w1, w2, w3, w4)] == 'link1 link2 link3 testfile'.split()
   assert (wt.path, wt.name) == ('testfile', None)
   assert w1.wd == w2.wd == w3.wd == w4.wd
   desc = w1.wd

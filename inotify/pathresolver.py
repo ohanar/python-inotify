@@ -219,7 +219,7 @@ def get_symlinkmax():
 
 
 class InvalidPathError (OSError):
-    def __init__(self, msg, path, *args, errno=None):
+    def __init__(self, msg, path, errno=None, *args):
         self.filename = path
         self.errno = errno
         if errno:
@@ -234,7 +234,7 @@ class SymlinkLoopError (InvalidPathError):
 class ConcurrentFilesystemModificationError (InvalidPathError):
     def __init__(self, path, *args):
         msg = "Path not valid: A concurrent change was detected while traversing '{}'".format(path)
-        InvalidPathError.__init__(self, msg, path, *args)
+        InvalidPathError.__init__(self, msg, path, errno=None, *args)
 
 
 # To be Python 2 and 3 compatible and also inherit from the right exception

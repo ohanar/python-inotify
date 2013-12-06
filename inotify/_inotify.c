@@ -20,6 +20,8 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+/* This should be at least large enough to hold a single
+ * inotify_event, otherwise crashes can occur. */
 #define READ_BUF_SIZE 64*1024
 
 /* for older pythons */
@@ -37,6 +39,8 @@
  ({ __typeof__ (a) _a = (a); \
 		 __typeof__ (b) _b = (b); \
 	 _a < _b ? _a : _b; })
+
+#define INE_SIZE sizeof(struct inotify_event)
 
 
 static PyObject *init(PyObject *self, PyObject *args)
@@ -533,8 +537,19 @@ static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 		while (pos < size) {
 			struct inotify_event *in = (struct inotify_event *) (buffer + pos);
 
-			if (size - pos < sizeof(struct inotify_event) ||
-					size - pos < sizeof(struct inotify_event) + in->len) {
+			// order these comparisons so there won't be an overflow if in->len is very large
+			if (size - pos < INE_SIZE || size - pos - INE_SIZE < in->len) {
+				if (pos == 0 ||
+						in->len > READ_BUF_SIZE - INE_SIZE ||
+						in->len >= readable - (read_total - nread + pos + INE_SIZE)) {
+					// This is not supposed to happen, unless we are reading
+					// garbage. Maybe the fd wasn't an inotify fd?
+					PyErr_SetString(PyExc_TypeError, "python-inotify internal error: " 
+							"read value from inotify fd seems to be garbage, "
+							"are you sure this is the right fd?");
+					goto bail;
+				}
+				// we read a partial message
 				memcpy(buffer, buffer + pos, size - pos);
 				pos = size - pos;
 				goto nextread;

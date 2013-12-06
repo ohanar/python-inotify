@@ -32,7 +32,7 @@ from collections import namedtuple
 from pathlib import PosixPath
 
 from . import pathresolver
-from . import _inotify
+from . import inotify as _inotify
 from .in_constants import constants, decode_mask, event_properties
 from .watcher import NoFilesException, _make_getter
 from .pathresolver import SymlinkLoopError, ConcurrentFilesystemModificationError
@@ -176,20 +176,12 @@ class PathWatcher (object):
         '''Register a watch to be .reconnect()'ed after event processing is finished'''
         self._reconnect.add(watch)
 
-    def read(self, block=True, bufsize=None):
+    def read(self, block=True):
         '''Read a list of queued inotify events.
 
-        block: If block is false, return only those events that can be read immediately.
-
-        bufsize: The buffer size to use to read events. Only meaningful if
-        block is True. If bufsize is too small, an error will occur.
-
+        block: If block is false, return only those events that can be
+        read immediately.
         '''
-
-        if not block:
-            bufsize = 0
-        elif bufsize == 0:
-            bufsize = None
 
         # We call _inotify.read once at first. If we are expecting an
         # IN_IGNORE, we read it again until we get all pening
@@ -217,7 +209,7 @@ class PathWatcher (object):
             do2 = True
             while do2 or self._pending_watch_removes > 0:
                 do2 = False
-                for e in self._read_events(bufsize):
+                for e in self._read_events(block):
                     # only filter duplicate path_changed events to
                     # prevent hiding of bugs that may cause duplicate
                     # other events to be created.
@@ -229,8 +221,8 @@ class PathWatcher (object):
         events, self.events = self.events, []
         return events
 
-    def _read_events(self, bufsize):
-        for evt in _inotify.read(self.fd, bufsize):
+    def _read_events(self, block):
+        for evt in _inotify.read(self.fd, block=block):
             if evt.wd == -1:
                 eventiter = self._handle_descriptorless_event(evt)
             else:
@@ -241,7 +233,7 @@ class PathWatcher (object):
     def _do_reconnect(self):
         # Do not just clear the list, but replace it, because the
         # reconnect call can cause new pathwatches to require
-        # reconnection.
+        # recursive reconnection.
         r, self._reconnect = self._reconnect, set()
         for w in r:
             w.reconnect()

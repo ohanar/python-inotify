@@ -64,7 +64,7 @@ def w():
 def test_open(w):
   w.add('testfile', inotify.IN_OPEN | inotify.IN_CLOSE)
   open('testfile').close()
-  ev1, ev2 = w.read(0)
+  ev1, ev2 = w.read(block=False)
   assert ev1.open
   assert ev2.close
   assert ev2.close_nowrite
@@ -73,9 +73,9 @@ def test_open(w):
 
 def test_move(w):
   w.add('.', inotify.IN_MOVE)
-  assert w.read(0) == []
+  assert w.read(block=False) == []
   os.rename('testfile', 'targetfile')
-  ev = w.read(0)
+  ev = w.read(block=False)
   for e in ev:
     if e.name == 'testfile':
       assert e.moved_from
@@ -97,18 +97,18 @@ def test_alias(w):
   assert w.get_watch('testfile') == w.get_watch('testlink')
   assert len(w.watches()) == 1
   open('testlink').close()
-  ev1, ev2 = w.read(0)
+  ev1, ev2 = w.read(block=False)
   assert ev1.open and ev2.close
   w.remove_path('testfile')
   open('testlink').close()
-  ev = w.read(0)
+  ev = w.read(block=False)
   assert any(e.close for e in ev)
 
 
 def test_delete(w):
     w.add('testfile', inotify.IN_DELETE_SELF)
     os.remove('testfile')
-    ev1, ev2 = w.read(0)
+    ev1, ev2 = w.read(block=False)
     assert ev1.delete_self
     assert ev2.ignored
     assert w.num_watches() == 0
@@ -156,4 +156,32 @@ def test_removewatch(w):
 
 def test_repr(w):
   w.add_all('.', inotify.IN_ALL_EVENTS)
-  print(w.read(0))
+  print(w.read(block=False))
+
+
+def test_read_args(w):
+  with pytest.raises(watcher.NoFilesException):
+    w.read()
+  w.add('.', inotify.IN_ALL_EVENTS)
+  evts = inotify.inotify.read(w.fileno(), block=False)
+  assert evts == []
+  readfd, writefd = os.pipe()
+  os.write(writefd, b'a'*100)
+  with pytest.raises(TypeError):
+    inotify.inotify.read(readfd, block=False)
+
+  ## In the current implementation this succeeds, but it's not
+  ## guaranteed or anything
+  # os.write(writefd, b'\0'*32)
+  # evts = inotify.inotify.read(readfd, block=False)
+  # for e in evts:
+  #   assert e.wd == e.mask == 0
+  #   assert e.name == e.cookie == None
+
+  os.close(writefd)
+  os.close(readfd)
+  
+
+def test_kwarg(w):
+  with pytest.raises(TypeError):
+    inotify.inotify.read(w.fileno(), False)
