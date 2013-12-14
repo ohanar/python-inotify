@@ -486,7 +486,7 @@ static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 	if (argc == -1)
 		goto bail;
 	if (argc > 1) {
-		PyErr_SetString(PyExc_TypeError, "read() takes exactly 1 positional argument but more were given");
+		PyErr_Format(PyExc_TypeError, "read() takes exactly 1 positional argument but %i were given", argc);
 		goto bail;
 	}
 #endif
@@ -502,9 +502,9 @@ static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 	if (ctor_args == NULL)
 		goto bail;
 
-	Py_BEGIN_ALLOW_THREADS
+	Py_BEGIN_ALLOW_THREADS;
 	ioctl_retval = ioctl(fd, FIONREAD, &readable);
-	Py_END_ALLOW_THREADS
+	Py_END_ALLOW_THREADS;
 
 	if (ioctl_retval < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
@@ -524,7 +524,7 @@ static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 
 		Py_BEGIN_ALLOW_THREADS
 		nread = read(fd, buffer + pos, toread);
-		Py_END_ALLOW_THREADS
+		Py_END_ALLOW_THREADS;
 
 		if (nread == -1) {
 			PyErr_SetFromErrno(PyExc_OSError);
@@ -544,9 +544,9 @@ static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 						in->len >= readable - (read_total - nread + pos + INE_SIZE)) {
 					// This is not supposed to happen, unless we are reading
 					// garbage. Maybe the fd wasn't an inotify fd?
-					PyErr_SetString(PyExc_TypeError, "python-inotify internal error: " 
-							"read value from inotify fd seems to be garbage, "
-							"are you sure this is the right fd?");
+					PyErr_Format(PyExc_TypeError, "python-inotify internal error: " 
+							"read value from fd %i seems to be garbage, "
+							"are you sure this is the right fd?", fd);
 					goto bail;
 				}
 				// we read a partial message
