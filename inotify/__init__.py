@@ -7,9 +7,9 @@
 # it under the terms of version 2.1 of the GNU Lesser General Public
 # License, incorporated herein by reference.
 
-# Additionally, code written by Jan Kanis may also be redistributed and/or 
-# modified under the terms of any version of the GNU Lesser General Public 
-# License greater than 2.1. 
+# Additionally, code written by Jan Kanis may also be redistributed and/or
+# modified under the terms of any version of the GNU Lesser General Public
+# License greater than 2.1.
 
 '''
 Low-level interface to the Linux inotify subsystem.
@@ -49,9 +49,6 @@ max_user_watches = _read_procfs_value('max_user_watches')
 from . import _inotify as inotify
 from .in_constants import constants, event_properties, watch_properties, decode_mask
 from .watcher import Watcher, AutoWatcher, Threshold, NoFilesException
-from .pathwatcher import PathWatcher
-from .pathresolver import InvalidPathError, SymlinkLoopError, \
-        ConcurrentFilesystemModificationError, FileNotFoundError, NotADirectoryError
 globals().update(constants)
 
 

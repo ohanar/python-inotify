@@ -7,37 +7,13 @@
 # it under the terms of version 2.1 of the GNU Lesser General Public
 # License, incorporated herein by reference.
 
-# Additionally, code written by Jan Kanis may also be redistributed and/or 
-# modified under the terms of any version of the GNU Lesser General Public 
-# License greater than 2.1. 
+# Additionally, code written by Jan Kanis may also be redistributed and/or
+# modified under the terms of any version of the GNU Lesser General Public
+# License greater than 2.1.
 
-import functools, operator
 from . import _inotify
 
 constants = {k: v for k,v in _inotify.__dict__.items() if k.startswith('IN_')}
-
-
-# These constants are not part of the linux inotify api, they are
-# added by this module for use in PathWatcher.
-inotify_builtin_constants = functools.reduce(operator.or_, constants.values())
-IN_PATH_MOVED_TO = 1
-while IN_PATH_MOVED_TO <= inotify_builtin_constants:
-    IN_PATH_MOVED_TO <<= 1
-IN_PATH_MOVED_FROM = IN_PATH_MOVED_TO << 1
-IN_PATH_CREATE = IN_PATH_MOVED_TO << 2
-IN_PATH_DELETE = IN_PATH_MOVED_TO << 3
-IN_PATH_UNMOUNT = IN_PATH_MOVED_TO << 4
-IN_PATH_MOVED = IN_PATH_MOVED_TO | IN_PATH_MOVED_FROM
-IN_PATH_CHANGED = IN_PATH_MOVED_TO | IN_PATH_MOVED_FROM | IN_PATH_CREATE | IN_PATH_DELETE | IN_PATH_UNMOUNT
-
-constants.update(dict(IN_PATH_MOVED_TO=IN_PATH_MOVED_TO,
-                      IN_PATH_MOVED_FROM=IN_PATH_MOVED_FROM,
-                      IN_PATH_CREATE=IN_PATH_CREATE,
-                      IN_PATH_DELETE=IN_PATH_DELETE,
-                      IN_PATH_UNMOUNT=IN_PATH_UNMOUNT,
-                      IN_PATH_MOVED=IN_PATH_MOVED,
-                      IN_PATH_CHANGED=IN_PATH_CHANGED))
-
 
 # Inotify flags that can be specified on a watch and can be returned in an event
 _inotify_properties = {
@@ -84,7 +60,7 @@ watch_properties = {
 watch_properties.update(_inotify_properties)
 
 
-combined_masks = set('IN_ALL_EVENTS IN_MOVE IN_CLOSE IN_PATH_MOVED IN_PATH_CHANGED'.split())
+combined_masks = set('IN_ALL_EVENTS IN_MOVE IN_CLOSE'.split())
 def decode_mask(mask):
     return [name for name, m in constants.items() if not name in combined_masks and m & mask]
 
