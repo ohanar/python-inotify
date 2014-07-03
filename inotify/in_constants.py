@@ -31,13 +31,6 @@ _inotify_properties = {
     'delete': 'Directory entry was deleted',
     'delete_self': 'The watched directory entry was deleted',
     'move_self': 'The watched directory entry was renamed',
-    'path_changed': 'The named path no longer resolves to the same file',
-    'path_moved_from': 'A component of path was moved away',
-    'path_moved_to': 'A file or directory was moved into the path as a component',
-    'path_moved': 'A component of path was moved',
-    'path_create': 'A previously nonexisting component along the path was created',
-    'path_delete': 'A component of path was deleted',
-    'path_unmount': 'A component of path was unmounted',
     }
 
 # Inotify flags that can only be returned in an event

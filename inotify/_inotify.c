@@ -486,7 +486,7 @@ static PyObject *read_events(PyObject *self, PyObject *args, PyObject *keywds)
 	if (argc == -1)
 		goto bail;
 	if (argc > 1) {
-		PyErr_Format(PyExc_TypeError, "read() takes exactly 1 positional argument but %i were given", argc);
+		PyErr_Format(PyExc_TypeError, "read() takes exactly 1 positional argument but %zd were given", argc);
 		goto bail;
 	}
 #endif
