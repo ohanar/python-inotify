@@ -28,7 +28,7 @@ if os.path.exists(inotify_dir+'/inotify') and not inotify_dir in sys.path:
   # as we do not want to override an explicit inotify package in the current
   # directory.
   try:
-    idx = next(i for i, p in enumerate(sys.path) if p and os.path.samefile(p, '.'))
+    idx = next(i for i, p in enumerate(sys.path) if os.path.exists(p) and os.path.samefile(p, '.'))
   except StopIteration:
     # In interactive mode, there is no entry for the current directory, but the
     # first entry of sys.path is the empty string which is interpreted as
@@ -180,7 +180,7 @@ def test_read_args(w):
 
   os.close(writefd)
   os.close(readfd)
-  
+
 
 def test_kwarg(w):
   with pytest.raises(TypeError):
