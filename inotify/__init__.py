@@ -24,6 +24,8 @@ For a higher-level interface that remains highly efficient, use the
 inotify.watcher package.
 '''
 
+from __future__ import absolute_import
+
 __author__ = "Jan Kanis <jan.code@jankanis.nl>"
 
 _procfs_path = '/proc/sys/fs/inotify'
